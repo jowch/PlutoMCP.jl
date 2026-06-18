@@ -52,6 +52,19 @@ function _wait_for_cell(cell; timeout=TOOL_TIMEOUT_SECONDS)
     return true
 end
 
+function _wait_cells!(cells; timeout=TOOL_TIMEOUT_SECONDS)
+    completed = UUID[]
+    timed_out = UUID[]
+    for cell in cells
+        if _wait_for_cell(cell; timeout=timeout)
+            push!(completed, cell.cell_id)
+        else
+            push!(timed_out, cell.cell_id)
+        end
+    end
+    return completed, timed_out
+end
+
 function _notify_browser(session, notebook)
     try
         Pluto.send_notebook_changes!(Pluto.ClientRequest(; session, notebook))
@@ -111,21 +124,36 @@ function _move_cell_in_order!(notebook, cell_id::UUID, after_cell_id)
 end
 
 function _stage_cell!(session, nb, cell)
-    mark_pending!(nb.notebook_id, cell.cell_id)
-    nb.topology = Pluto.updated_topology(nb.topology, nb, [cell])
+    _stage_cells!(session, nb, [cell])
+end
+
+function _stage_cells!(session, nb, cells)
+    for cell in cells
+        mark_pending!(nb.notebook_id, cell.cell_id)
+    end
+    nb.topology = Pluto.updated_topology(nb.topology, nb, cells)
     Pluto.save_notebook(session, nb)
     _notify_browser(session, nb)
 end
 
 function _run_cells!(session, nb, cells; wait_for_completion=true)
+    warnings = String[]
     Pluto.update_save_run!(session, nb, cells; run_async=!wait_for_completion, save=true)
     if wait_for_completion
-        for cell in cells
-            _wait_for_cell(cell; timeout=TOOL_TIMEOUT_SECONDS)
+        completed, timed_out = _wait_cells!(cells)
+        for cid in timed_out
+            push!(warnings, "execution_timeout::Cell $cid did not finish within $(TOOL_TIMEOUT_SECONDS)s")
         end
+        !isempty(completed) && clear_pending!(nb.notebook_id, completed)
+    else
+        @async begin
+            completed, = _wait_cells!(cells)
+            !isempty(completed) && clear_pending!(nb.notebook_id, completed)
+        end
+        push!(warnings, "async_execution::cells running; pending_run clears when execution finishes")
     end
-    clear_pending!(nb.notebook_id, [c.cell_id for c in cells])
     _notify_browser(session, nb)
+    return warnings
 end
 
 # ---------------------------------------------------------------------------
@@ -162,15 +190,17 @@ function tool_edit_cell(session, args)
     record_read!(nb.notebook_id, cell.cell_id, code)
 
     if run_after
-        _run_cells!(session, nb, [cell]; wait_for_completion=true)
+        warnings = _run_cells!(session, nb, [cell]; wait_for_completion=true)
     else
         _stage_cell!(session, nb, cell)
+        warnings = String[]
     end
 
     receipt = _mutation_receipt(session, nb;
         applied=true,
         mutation=Dict{String,Any}("type" => "edit_cell", "cell_id" => string(cell.cell_id)),
         cell_ids_run=run_after ? [cell.cell_id] : UUID[],
+        warnings=warnings,
     )
     merge!(receipt, _cell_to_dict(cell; notebook_id=nb.notebook_id))
     return receipt
@@ -181,14 +211,19 @@ function tool_edit_cells(session, args)
     edits = args["cells"]
 
     edited_ids = UUID[]
+    staged_cells = Pluto.Cell[]
     for edit in edits
         cell = _get_cell(nb, edit["cell_id"])
         require_fresh_read!(nb.notebook_id, cell)
+    end
+    for edit in edits
+        cell = _get_cell(nb, edit["cell_id"])
         cell.code = edit["code"]
         record_read!(nb.notebook_id, cell.cell_id, edit["code"])
-        _stage_cell!(session, nb, cell)
         push!(edited_ids, cell.cell_id)
+        push!(staged_cells, cell)
     end
+    _stage_cells!(session, nb, staged_cells)
 
     return _mutation_receipt(session, nb;
         applied=true,
@@ -219,6 +254,7 @@ function tool_add_cell(session, args)
 
     new_cell = Pluto.Cell(; code=string(code))
     nb.cells_dict[new_cell.cell_id] = new_cell
+    record_read!(nb.notebook_id, new_cell.cell_id, string(code))
 
     if after_cell_id === nothing || after_cell_id == ""
         _append_cell!(nb, new_cell.cell_id)
@@ -232,15 +268,17 @@ function tool_add_cell(session, args)
     end
 
     if run_after
-        _run_cells!(session, nb, [new_cell]; wait_for_completion=true)
+        warnings = _run_cells!(session, nb, [new_cell]; wait_for_completion=true)
     else
         _stage_cell!(session, nb, new_cell)
+        warnings = String[]
     end
 
     receipt = _mutation_receipt(session, nb;
         applied=true,
         mutation=Dict{String,Any}("type" => "add_cell", "cell_id" => string(new_cell.cell_id)),
         cell_ids_run=run_after ? [new_cell.cell_id] : UUID[],
+        warnings=warnings,
     )
     merge!(receipt, _cell_to_dict(new_cell; notebook_id=nb.notebook_id))
     return receipt
@@ -265,6 +303,7 @@ function tool_delete_cell(session, args)
         applied=true,
         mutation=Dict{String,Any}("type" => "delete_cell", "cell_id" => cell_id_str),
         cell_ids_run=UUID[],
+        execution_status="completed",
     )
 end
 
@@ -273,12 +312,13 @@ function tool_execute_cell(session, args)
     cell     = _get_cell(nb, args["cell_id"])
     wait_for = get(args, "wait_for_completion", true)
 
-    _run_cells!(session, nb, [cell]; wait_for_completion=wait_for)
+    warnings = _run_cells!(session, nb, [cell]; wait_for_completion=wait_for)
 
     return _mutation_receipt(session, nb;
         applied=true,
         mutation=Dict{String,Any}("type" => "execute_cell", "cell_id" => string(cell.cell_id)),
         cell_ids_run=[cell.cell_id],
+        warnings=warnings,
     )
 end
 
@@ -287,11 +327,20 @@ function tool_submit_changes(session, args)
     wait_for = get(args, "wait_for_completion", true)
 
     target_ids = if haskey(args, "cell_ids")
-        [try
+        ids = [try
             UUID(cid)
         catch
             throw(ArgumentError("invalid_cell_id::Invalid cell ID: '$cid'"))
         end for cid in args["cell_ids"]]
+        if !get(args, "force", false)
+            pending = Set(pending_run_ids(nb.notebook_id))
+            for cid in ids
+                cid in pending || throw(ArgumentError(
+                    "not_staged::Cell $cid is not in pending_run; stage first or pass force=true"
+                ))
+            end
+        end
+        ids
     else
         pending_run_ids(nb.notebook_id)
     end
@@ -301,16 +350,18 @@ function tool_submit_changes(session, args)
             applied=true,
             mutation=Dict{String,Any}("type" => "submit_changes"),
             cell_ids_run=UUID[],
+            execution_status="completed",
         )
     end
 
     cells = [_get_cell(nb, string(cid)) for cid in target_ids]
-    _run_cells!(session, nb, cells; wait_for_completion=wait_for)
+    warnings = _run_cells!(session, nb, cells; wait_for_completion=wait_for)
 
     return _mutation_receipt(session, nb;
         applied=true,
         mutation=Dict{String,Any}("type" => "submit_changes"),
         cell_ids_run=target_ids,
+        warnings=warnings,
     )
 end
 
@@ -318,12 +369,30 @@ function tool_run_all_cells(session, args)
     nb       = _get_notebook(session, args["notebook_id"])
     wait_for = get(args, "wait_for_completion", false)
 
-    Pluto.update_save_run!(session, nb, nb.cells; run_async=!wait_for, save=true)
+    cells = collect(nb.cells)
+    cell_ids = [c.cell_id for c in cells]
+    Pluto.update_save_run!(session, nb, cells; run_async=!wait_for, save=true)
+    warnings = String[]
+    if wait_for
+        _, timed_out = _wait_cells!(cells)
+        for cid in timed_out
+            push!(warnings, "execution_timeout::Cell $cid did not finish within $(TOOL_TIMEOUT_SECONDS)s")
+        end
+        isempty(timed_out) && clear_all_pending!(nb.notebook_id)
+    else
+        @async begin
+            _, timed_out = _wait_cells!(cells)
+            isempty(timed_out) && clear_all_pending!(nb.notebook_id)
+        end
+        push!(warnings, "async_execution::cells running; pending_run clears when execution finishes")
+    end
     _notify_browser(session, nb)
 
-    Dict{String,Any}(
-        "notebook_id" => string(nb.notebook_id),
-        "status"      => wait_for ? "completed" : "queued",
+    return _mutation_receipt(session, nb;
+        applied=true,
+        mutation=Dict{String,Any}("type" => "run_all_cells"),
+        cell_ids_run=cell_ids,
+        warnings=warnings,
     )
 end
 
@@ -348,6 +417,7 @@ function tool_move_cell(session, args)
             "new_index" => new_idx,
         ),
         cell_ids_run=UUID[],
+        execution_status="completed",
     )
 end
 
