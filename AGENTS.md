@@ -5,21 +5,17 @@
 - Stage-first editing: `run_after=false` default on `edit_cell`/`add_cell`; batch run via `submit_changes` (Pluto Cmd+S semantics).
 - Server-side dirty tracking (`pending_run`, `stale_cell_ids`); do not rely on curated instructions alone.
 - Read-before-edit enforced in MCP tools (`edit_cell`/`add_cell`), not agent rules alone — reject or require fresh read receipt.
-- `read_notebook_code` defaults to execution/dependency order, not visual cell order.
-- Include empty code cells in `read_notebook_code` projection.
-- `read_notebook_code` returns `code` plus `cell_ids` and `stale_cell_ids`/`pending_run`; not a duplicate `cells[]` array.
+- `read_notebook_code`: execution/dependency order; include empty cells; returns `code`, `cell_ids`, `stale_cell_ids`/`pending_run` (not `cells[]`).
 - `resolve_pluto_context` maps Design Mode `dom_path`, Glass URL, or `browser_element` block → `notebook_id` + `cell_id`.
 - Remove `get_notebook_state` from the agent-facing MCP surface.
 - Omit markdown, manifest blobs, and `@bind` scaffolding from default `read_notebook_code` projection.
 - Ground Pluto projection rules on real notebook artifacts in a gitignored `reference/` directory.
-- `@bind` must be last expression in cell (widget in output); show bound value in a separate cell.
-- Pluto cells are single expressions; multi-statement bodies need `begin`/`let` or separate cells (agent guide: Styx `docs/pluto-agent-primer.md`).
-- When fixing `pluto_multi_expression`, agents should default to `begin`/`end` wrap (see Styx primer); `error.fixes` lists `wrap_begin_end` first.
+- Pluto cell grammar: single-expression cells; `@bind` last in cell; default `begin`/`end` for `pluto_multi_expression` (Styx `docs/pluto-agent-primer.md`).
 - **Commit hygiene:** commit at logical boundaries as you go — modules → wiring → tests → docs when possible; split unrelated work (e.g. eval harness vs Phase 2 graph tools). Ask before pushing.
 
 ## Learned Workspace Facts
 
-- Extend **jowch/PlutoMCP.jl** in-process; hold upstream PRs until existing upstream PRs are addressed; ship on fork `main` first.
+- Extend **jowch/PlutoMCP.jl** in-process; hold upstream PRs until existing upstream PRs are addressed; ship on fork `main` first; keep fork diffs minimal — core staging/read guards/receipts are upstream-worthy.
 - Agents mutate live `Pluto.Notebook` via MCP; Pluto owns persistence, reactivity, and browser sync.
 - Primary identity primitive: `notebook_id` plus `cell_id` (matches `<pluto-cell id="...">` in the browser).
 - MCP writes server notebook state directly; the browser editor has a separate draft buffer (last-write-wins on server).
