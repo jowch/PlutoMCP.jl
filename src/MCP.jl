@@ -284,6 +284,48 @@ const MCP_TOOLS = [
             "required" => ["notebook_id", "query"],
         ),
     ),
+    Dict{String,Any}(
+        "name"        => "pluto_session_status",
+        "description" => "Return whether the Pluto server is running and which notebooks are open in this session.",
+        "inputSchema" => Dict{String,Any}(
+            "type"       => "object",
+            "properties" => Dict{String,Any}(),
+            "required"   => String[],
+        ),
+    ),
+    Dict{String,Any}(
+        "name"        => "start_pluto_session",
+        "description" => "Start the Pluto server and MCP HTTP bridge on demand (idempotent). Required before notebook read/write tools in deferred standalone mode.",
+        "inputSchema" => Dict{String,Any}(
+            "type"       => "object",
+            "properties" => Dict{String,Any}(
+                "pluto_port" => Dict("type" => "integer", "description" => "Pluto UI port. Default: 1234."),
+                "mcp_port"   => Dict("type" => "integer", "description" => "MCP HTTP bridge port. Default: 2346."),
+            ),
+            "required" => String[],
+        ),
+    ),
+    Dict{String,Any}(
+        "name"        => "stop_pluto_session",
+        "description" => "Shut down notebooks in the standalone Pluto session and clear server state.",
+        "inputSchema" => Dict{String,Any}(
+            "type"       => "object",
+            "properties" => Dict{String,Any}(),
+            "required"   => String[],
+        ),
+    ),
+    Dict{String,Any}(
+        "name"        => "open_notebook",
+        "description" => "Load a .jl notebook file into the live Pluto session (user-confirmed path). Default safe preview (no auto-run); set run_notebook=true to execute all cells.",
+        "inputSchema" => Dict{String,Any}(
+            "type"       => "object",
+            "properties" => Dict{String,Any}(
+                "path"          => Dict("type" => "string", "description" => "Filesystem path to the notebook .jl file."),
+                "run_notebook"  => Dict("type" => "boolean", "description" => "Run all cells after open. Default: false (safe preview)."),
+            ),
+            "required" => ["path"],
+        ),
+    ),
 ]
 
 # ---------------------------------------------------------------------------
@@ -322,7 +364,7 @@ _err(id, code, message) = Dict{String,Any}(
 # ---------------------------------------------------------------------------
 
 function _handle_tool_call(session, name, arguments)
-    result = call_tool(session, name, arguments)
+    result = call_tool_with_session(session, name, arguments)
     Dict{String,Any}(
         "content" => [Dict{String,Any}("type" => "text", "text" => JSON3.write(result))],
         "isError" => false,

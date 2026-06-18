@@ -23,6 +23,8 @@
 - Structural MCP edits (`add_cell`, `delete_cell`, `move_cell`) must assign a new `cell_order` vector before `_notify_browser` — in-place mutation skips `cell_order` WebSocket patches (see Styx `docs/known-issues/plutomcp-cell-order-sync.md`).
 - `serve()` starts full Pluto frontend (HTTP + MCP); not headless.
 - `serve()` / standalone `connect()` forward `require_secret_for_access` to Pluto `Options` (default `true`); plugin uses `false` on loopback.
-- Cursor **Styx** plugin spawns bridge via `mcp.json` launcher → `connect()` proxy (D12).
+- **D15 lifecycle:** `pluto_session_status`, `start_pluto_session`, `stop_pluto_session`, `open_notebook`; deferred standalone `connect()` (no lazy-start on first tool); `start_pluto_session` starts Pluto + HTTP bridge on `:2346`.
+- **Safe preview:** `open_notebook` default → remind user that edits won't run until **Run notebook code** in Glass; still edit when asked; if user asks to run, direct to Glass (no MCP bypass).
+- Cursor **Styx** plugin spawns deferred `connect()` via `mcp.json` launcher (D15); proxy mode when `:2346/health` already up.
 - Layer 2 graph/validation MCP tools ship here after Phase 1 validates.
 - Deterministic eval gate lives in [Styx `eval/`](https://github.com/jowch/styx/tree/main/eval) (`run_reference.jl --all`); PlutoMCP keeps optional `EvalLog.jl` hook only.

@@ -87,12 +87,12 @@ Claude Desktop connects to the running bridge. **No Pluto process is started by 
 }
 ```
 
-`connect()` automatically detects whether a `PlutoMCP.serve()` bridge is running:
+`connect()` automatically detects whether an MCP HTTP bridge is running on `:2346`:
 
-- **Bridge running** (recommended): proxies all tool calls through the bridge, so Claude sees the live Pluto session and any notebooks you have open.
-- **No bridge**: starts its own isolated Pluto session lazily on the first tool call.
+- **Bridge running** (e.g. dev `serve()`): proxies all tool calls through the bridge.
+- **No bridge (D15 deferred mode):** MCP stdio stays up; call `start_pluto_session` before notebook tools. Pluto and the HTTP bridge start together on demand.
 
-In both cases Claude Desktop starts up instantly — no waiting for Julia at launch time.
+In both cases the MCP client starts up instantly — no waiting for Julia/Pluto at launch time.
 
 #### Cursor
 
@@ -109,6 +109,17 @@ In both cases Claude Desktop starts up instantly — no waiting for Julia at lau
 ---
 
 ## Available MCP tools
+
+### Session lifecycle (D15)
+
+| Tool | Description |
+|---|---|
+| `pluto_session_status` | Whether Pluto is running; open notebooks; ports |
+| `start_pluto_session` | Start Pluto + MCP HTTP bridge on demand (idempotent) |
+| `stop_pluto_session` | Shut down notebooks and clear session state |
+| `open_notebook` | Load a `.jl` file server-side; safe preview by default (`run_notebook=false`) |
+
+### Notebook read/write
 
 | Tool | Description |
 |---|---|

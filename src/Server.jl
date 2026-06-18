@@ -203,7 +203,7 @@ Then configure your MCP client **once**:
 ```
 
 The bridge must be running before an HTTP/SSE client connects.
-For stdio clients, use `connect()` instead — it starts Pluto lazily on first use.
+For stdio clients, use `connect()` instead — call `start_pluto_session` before notebook tools (D15 deferred mode).
 """
 function serve(;
     pluto_port=1234,
@@ -217,31 +217,20 @@ function serve(;
 )
     configure_eval_log!(path=eval_log, run_id=eval_run_id, redact_code=eval_redact_code)
 
-    @eval using Pluto
-    # `Pluto` binding was added in the new world age; define a helper there and
-    # call it via @eval so both the binding lookup and call happen in the latest
-    # world (avoids Julia 1.12+ "prior world" binding warning / malfunction).
-    @eval function __pluto_serve_init__(pluto_port, launch_browser, notebook, require_secret_for_access)
-        opts = Pluto.Configuration.from_flat_kwargs(
-            port                      = pluto_port,
-            launch_browser            = launch_browser,
-            require_secret_for_access = require_secret_for_access,
-        )
-        sess = Pluto.ServerSession(; options = opts)
-        if notebook !== nothing
-            Pluto.SessionActions.open(sess, notebook; run_async = true)
-        end
-        @async try
-            Pluto.run!(sess)
-        catch e
-            @error "Pluto server error" exception=(e, catch_backtrace())
-        end
-        sleep(1.0)  # brief pause so Pluto is up before MCP clients connect
-        sess
-    end
-    pluto_session = @eval __pluto_serve_init__(
-        $pluto_port, $launch_browser, $notebook, $require_secret_for_access,
+    configure_standalone!(;
+        pluto_port = pluto_port,
+        mcp_port = mcp_port,
+        require_secret_for_access = require_secret_for_access,
     )
+    start_pluto_stack!(;
+        pluto_port,
+        mcp_port,
+        require_secret_for_access,
+        launch_browser,
+        notebook,
+        http_async = false,
+    )
+    pluto_session = standalone_session()
 
     @info "PlutoMCP ready"
     @info "  Pluto UI       → http://localhost:$pluto_port"
@@ -251,7 +240,7 @@ function serve(;
     try
         _run_http_mcp_server(pluto_session, mcp_port)
     finally
-        reset_staging_state!()
+        stop_pluto_stack!()
     end
 end
 
@@ -271,8 +260,8 @@ function proxies all MCP calls through it — so tool calls reach the live Pluto
 session that `serve()` owns, including any notebooks you have open in your
 browser.
 
-**If no bridge is running**, it falls back to standalone mode: Pluto is started
-lazily on the first `tools/call`.
+**If no bridge is running**, standalone deferred mode: MCP stdio stays up; call
+`start_pluto_session` before notebook tools (D15).
 
 ## Recommended workflow
 
@@ -311,7 +300,7 @@ function connect(; pluto_port=1234, mcp_port=2346, require_secret_for_access=tru
         @info "PlutoMCP: bridge detected at :$mcp_port — proxying stdio through it"
         _run_stdio_proxy(mcp_port)
     else
-        _run_standalone_stdio(pluto_port; require_secret_for_access)
+        _run_standalone_stdio(pluto_port, mcp_port; require_secret_for_access)
     end
 end
 
@@ -345,49 +334,29 @@ function _run_stdio_proxy(mcp_port::Int)
 end
 
 # ---------------------------------------------------------------------------
-# Standalone mode: lazily start own Pluto on first tools/call
+# Standalone mode: deferred Pluto (D15) — lifecycle tools start the session
 # ---------------------------------------------------------------------------
 
-function _run_standalone_stdio(pluto_port::Int; require_secret_for_access=true)
-    pluto_session = Ref{Any}(nothing)
+function _run_standalone_stdio(pluto_port::Int, mcp_port::Int; require_secret_for_access=true)
+    configure_standalone!(;
+        pluto_port = pluto_port,
+        mcp_port = mcp_port,
+        require_secret_for_access = require_secret_for_access,
+    )
 
-    function _get_session()
-        if pluto_session[] === nothing
-            @info "PlutoMCP: first tool call — starting Pluto (this may take ~30 s)…"
-            @eval using Pluto
-            @eval function __pluto_connect_init__(pluto_port, require_secret_for_access)
-                opts = Pluto.Configuration.from_flat_kwargs(
-                    port                      = pluto_port,
-                    launch_browser            = false,
-                    require_secret_for_access = require_secret_for_access,
-                )
-                sess = Pluto.ServerSession(; options = opts)
-                @async try
-                    Pluto.run!(sess)
-                catch e
-                    @error "Pluto server error" exception=(e, catch_backtrace())
-                end
-                sleep(1.0)
-                sess
-            end
-            pluto_session[] = @eval __pluto_connect_init__(
-                $pluto_port, $require_secret_for_access,
-            )
-        end
-        pluto_session[]
+    if get(ENV, "PLUTOMCP_AUTO_SERVE", "0") == "1"
+        start_pluto_stack!()
     end
 
     while !eof(stdin)
         msg = _read_message(stdin)
         msg === nothing && break
 
-        method = get(msg, "method", "")
-        id     = get(msg, "id", nothing)
-
+        id = get(msg, "id", nothing)
         # Notifications (no id) require no response
         id === nothing && continue
 
-        sess = method == "tools/call" ? _get_session() : nothing
+        sess = standalone_session()
         resp = _dispatch_mcp(sess, msg)
         resp === nothing && continue
         _write_message(stdout, resp)

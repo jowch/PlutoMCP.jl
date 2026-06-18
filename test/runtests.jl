@@ -879,4 +879,117 @@ end
         end
     end
 
+    # ---------------------------------------------------------------------------
+    # D15 lifecycle — deferred standalone session
+    # ---------------------------------------------------------------------------
+
+    @testset "lifecycle: pluto_session_status when stopped" begin
+        PlutoMCP.stop_pluto_stack!()
+        status = PlutoMCP.tool_pluto_session_status(Dict{String,Any}())
+        @test status["pluto"] == "stopped"
+        @test status["pluto_port"] == 1234
+        @test isempty(status["notebooks"])
+    end
+
+    @testset "lifecycle: open_notebook loads file without run" begin
+        PlutoMCP.stop_pluto_stack!()
+        fixture = joinpath(@__DIR__, "fixtures", "test_notebook.jl")
+        session = Pluto.ServerSession()
+        PlutoMCP.bind_standalone_session!(session)
+        try
+            result = PlutoMCP.tool_open_notebook(Dict(
+                "path"         => fixture,
+                "run_notebook" => false,
+            ))
+            @test isfile(fixture)
+            @test haskey(result, "notebook_id")
+            @test result["path"] == abspath(fixture)
+            @test result["execution_allowed"] == false
+            @test result["ran"] == false
+            @test haskey(session.notebooks, UUID(result["notebook_id"]))
+        finally
+            PlutoMCP.stop_pluto_stack!()
+        end
+    end
+
+    @testset "lifecycle: open_notebook file_not_found" begin
+        PlutoMCP.stop_pluto_stack!()
+        session = Pluto.ServerSession()
+        PlutoMCP.bind_standalone_session!(session)
+        try
+            @test_throws Exception PlutoMCP.tool_open_notebook(Dict("path" => "/no/such/notebook.jl"))
+        finally
+            PlutoMCP.stop_pluto_stack!()
+        end
+    end
+
+    @testset "lifecycle: call_tool_with_session without Pluto" begin
+        PlutoMCP.stop_pluto_stack!()
+        @test_throws Exception PlutoMCP.call_tool_with_session(
+            nothing, "read_cell", Dict("notebook_id" => "x", "cell_id" => "y"),
+        )
+    end
+
+    @testset "MCP protocol: deferred read_cell returns pluto_not_running" begin
+        PlutoMCP.stop_pluto_stack!()
+
+        buf_in  = IOBuffer()
+        buf_out = IOBuffer()
+
+        write_msg(buf_in, Dict("jsonrpc" => "2.0", "id" => 7, "method" => "tools/call",
+            "params" => Dict(
+                "name" => "read_cell",
+                "arguments" => Dict(
+                    "notebook_id" => string(uuid4()),
+                    "cell_id"     => string(uuid4()),
+                ),
+            )))
+        seekstart(buf_in)
+
+        PlutoMCP.run_mcp_server(nothing, buf_in, buf_out)
+
+        resp = read_resp(buf_out)
+        @test resp["result"]["isError"] == true
+        err = JSON3.read(resp["result"]["content"][1]["text"])
+        @test err["error"] == "pluto_not_running"
+    end
+
+    @testset "MCP protocol: deferred pluto_session_status" begin
+        PlutoMCP.stop_pluto_stack!()
+
+        buf_in  = IOBuffer()
+        buf_out = IOBuffer()
+
+        write_msg(buf_in, Dict("jsonrpc" => "2.0", "id" => 8, "method" => "tools/call",
+            "params" => Dict("name" => "pluto_session_status", "arguments" => Dict{String,Any}())))
+        seekstart(buf_in)
+
+        PlutoMCP.run_mcp_server(nothing, buf_in, buf_out)
+
+        resp = read_resp(buf_out)
+        @test resp["result"]["isError"] == false
+        status = JSON3.read(resp["result"]["content"][1]["text"])
+        @test status["pluto"] == "stopped"
+    end
+
+    @testset "MCP protocol: tools/list lifecycle tools" begin
+        session, _, _ = make_session_with_notebook("x = 1")
+
+        buf_in  = IOBuffer()
+        buf_out = IOBuffer()
+
+        write_msg(buf_in, Dict("jsonrpc" => "2.0", "id" => 9, "method" => "tools/list", "params" => Dict()))
+        seekstart(buf_in)
+
+        PlutoMCP.run_mcp_server(session, buf_in, buf_out)
+
+        resp  = read_resp(buf_out)
+        names = [t["name"] for t in resp["result"]["tools"]]
+
+        @test "pluto_session_status" ∈ names
+        @test "start_pluto_session" ∈ names
+        @test "stop_pluto_session"  ∈ names
+        @test "open_notebook"       ∈ names
+    end
+
 end
