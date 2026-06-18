@@ -310,7 +310,7 @@ MCP tool results are plain text, so rich cell outputs are serialized as follows:
 See [`eval/README.md`](eval/README.md) for the full harness.
 
 - **Reference runner (CI):** `julia --project=. eval/run_reference.jl --all` — golden-path tool sequences via HTTP `/call`, no API key
-- **Scoring:** `eval/score.jl` — outcome (strict) + trace (advisory) from server-side `eval_log` jsonl
+- **Scoring:** `eval/lib/EvalShared.jl` (`run_score`) — outcome (strict) + trace (advisory, `--strict-trace` to gate) from server-side `eval_log` jsonl
 - **SDK eval** lives in [Styx `eval/`](https://github.com/jowch/styx/tree/main/eval) — Cursor SDK orchestrator (`CURSOR_API_KEY`).
 
 Eval kwargs on `serve()`: `eval_log`, `eval_run_id`, `eval_redact_code`. Or env vars `PLUTOMCP_EVAL_LOG`, `PLUTOMCP_EVAL_RUN_ID`.

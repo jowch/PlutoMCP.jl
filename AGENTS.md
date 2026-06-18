@@ -19,7 +19,7 @@
 
 ## Learned Workspace Facts
 
-- Extend this fork (jowch/PlutoMCP.jl) in-process; not a greenfield MCP server.
+- Extend **jowch/PlutoMCP.jl** in-process; hold upstream PRs until existing upstream PRs are addressed; ship on fork `main` first.
 - Agents mutate live `Pluto.Notebook` via MCP; Pluto owns persistence, reactivity, and browser sync.
 - Primary identity primitive: `notebook_id` plus `cell_id` (matches `<pluto-cell id="...">` in the browser).
 - MCP writes server notebook state directly; the browser editor has a separate draft buffer (last-write-wins on server).
