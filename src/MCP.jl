@@ -30,7 +30,7 @@ const MCP_TOOLS = [
     ),
     Dict{String,Any}(
         "name"        => "edit_cell",
-        "description" => "Replace the code in a cell. Requires a prior read_cell or read_notebook_code on this cell. Stages the edit by default (run_after=false); call submit_changes to run staged cells.",
+        "description" => "Replace the code in a cell. Requires a prior read_cell or read_notebook_code on this cell. Stages the edit by default (run_after=false); call submit_changes to run staged cells. After a successful edit, the server records a read receipt for the new code (satisfies read guard for your own staged edits only).",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(
@@ -44,7 +44,7 @@ const MCP_TOOLS = [
     ),
     Dict{String,Any}(
         "name"        => "edit_cells",
-        "description" => "Batch stage cell code edits. Each cell must have been read first. Never runs cells; call submit_changes to execute staged edits.",
+        "description" => "Batch stage cell code edits. Each cell must have been read first. All-or-nothing on read guard failure. Never runs cells; call submit_changes to execute staged edits. After success, read receipts are updated for each edited cell.",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(
@@ -67,7 +67,7 @@ const MCP_TOOLS = [
     ),
     Dict{String,Any}(
         "name"        => "add_cell",
-        "description" => "Insert a new cell into the notebook. after_cell_id is required when the notebook is not empty; that anchor cell must have been read first.",
+        "description" => "Insert a new cell into the notebook. after_cell_id is required when the notebook is not empty; that anchor cell must have been read first. Records a read receipt for the new cell (same as edit_cell).",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(
@@ -93,7 +93,7 @@ const MCP_TOOLS = [
     ),
     Dict{String,Any}(
         "name"        => "execute_cell",
-        "description" => "Run a specific cell (Shift+Enter). Optionally wait for completion.",
+        "description" => "Run a specific cell (Shift+Enter). Clears that cell from pending_run when execution finishes. Optionally wait for completion.",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(
@@ -106,7 +106,7 @@ const MCP_TOOLS = [
     ),
     Dict{String,Any}(
         "name"        => "submit_changes",
-        "description" => "Run all staged (dirty) cells, like Cmd+S in Pluto. Runs reactive dependents automatically.",
+        "description" => "Run all staged (dirty) cells, like Cmd+S in Pluto. Runs reactive dependents automatically. Explicit cell_ids must be in pending_run unless force=true. With wait_for_completion=false, pending_run clears in the background when execution finishes.",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(
@@ -116,6 +116,7 @@ const MCP_TOOLS = [
                     "items"       => Dict("type" => "string"),
                     "description" => "Optional subset of cell IDs to run; defaults to all pending staged cells.",
                 ),
+                "force"               => Dict("type" => "boolean", "description" => "Allow running cell_ids not in pending_run. Default: false."),
                 "wait_for_completion" => Dict("type" => "boolean", "description" => "Block until cells finish. Default: true."),
             ),
             "required" => ["notebook_id"],
@@ -123,7 +124,7 @@ const MCP_TOOLS = [
     ),
     Dict{String,Any}(
         "name"        => "run_all_cells",
-        "description" => "Re-run all cells in the notebook in dependency order.",
+        "description" => "Re-run all cells in the notebook in dependency order. Clears pending_run when execution finishes. Default wait_for_completion=false queues the run; pass true to block until done. Prefer submit_changes for staged agent edits.",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(
