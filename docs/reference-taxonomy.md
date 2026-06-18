@@ -6,7 +6,7 @@
 
 Pluto notebooks on disk are not a flat Julia script. Agents need a **file-shaped code projection** from live `Pluto.Notebook` state. This doc classifies on-disk and in-memory cell kinds so Phase 1A can implement projection via Pluto internals (not raw-file regex).
 
-**Spec:** [pluto-cursor-bridge `mcp-phase-1.md` § 1A](https://github.com/jowch/pluto-cursor-bridge/blob/main/docs/specs/mcp-phase-1.md) (projection rules).
+**Spec:** [Styx `mcp-phase-1.md` § 1A](https://github.com/jowch/styx/blob/main/docs/specs/mcp-phase-1.md) (projection rules).
 
 ---
 

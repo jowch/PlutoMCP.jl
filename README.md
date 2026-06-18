@@ -311,7 +311,7 @@ See [`eval/README.md`](eval/README.md) for the full harness.
 
 - **Reference runner (CI):** `julia --project=. eval/run_reference.jl --all` — golden-path tool sequences via HTTP `/call`, no API key
 - **Scoring:** `eval/score.jl` — outcome (strict) + trace (advisory) from server-side `eval_log` jsonl
-- **SDK runs:** [pluto-cursor-bridge/eval](../pluto-cursor-bridge/eval/) — Cursor SDK orchestrator (`CURSOR_API_KEY`)
+- **SDK eval** lives in [Styx `eval/`](https://github.com/jowch/styx/tree/main/eval) — Cursor SDK orchestrator (`CURSOR_API_KEY`).
 
 Eval kwargs on `serve()`: `eval_log`, `eval_run_id`, `eval_redact_code`. Or env vars `PLUTOMCP_EVAL_LOG`, `PLUTOMCP_EVAL_RUN_ID`.
 

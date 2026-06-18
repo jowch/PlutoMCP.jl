@@ -73,7 +73,7 @@ Or via environment: `PLUTOMCP_EVAL_LOG`, `PLUTOMCP_EVAL_RUN_ID`, `PLUTOMCP_EVAL_
 
 ## SDK agent runs
 
-See [pluto-cursor-bridge/eval/README.md](../../pluto-cursor-bridge/eval/README.md) for Cursor SDK orchestration (`CURSOR_API_KEY` required).
+See [Styx eval/README.md](https://github.com/jowch/styx/blob/main/eval/README.md) for Cursor SDK orchestration (`CURSOR_API_KEY` required).
 
 ## Phase 1 gate
 

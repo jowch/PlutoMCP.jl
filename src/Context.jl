@@ -1,5 +1,5 @@
 # Design Mode / Glass context resolution (Path A, D13).
-# Mirrors pluto-cursor-bridge src/dom-resolver.js parseDomPath semantics.
+# Mirrors Styx `src/dom-resolver.js` parseDomPath semantics.
 
 const _RE_CELL_ID = r"pluto-cell#([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"i
 const _RE_NOTEBOOK_ID = r"pluto-notebook#([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"i

@@ -13,8 +13,8 @@
 - Omit markdown, manifest blobs, and `@bind` scaffolding from default `read_notebook_code` projection.
 - Ground Pluto projection rules on real notebook artifacts in a gitignored `reference/` directory.
 - `@bind` must be last expression in cell (widget in output); show bound value in a separate cell.
-- Pluto cells are single expressions; multi-statement bodies need `begin`/`let` or separate cells (agent guide: pluto-cursor-bridge `docs/pluto-agent-primer.md`).
-- When fixing `pluto_multi_expression`, agents should default to `begin`/`end` wrap (see pluto-cursor-bridge primer); `error.fixes` lists `wrap_begin_end` first.
+- Pluto cells are single expressions; multi-statement bodies need `begin`/`let` or separate cells (agent guide: Styx `docs/pluto-agent-primer.md`).
+- When fixing `pluto_multi_expression`, agents should default to `begin`/`end` wrap (see Styx primer); `error.fixes` lists `wrap_begin_end` first.
 - **Commit hygiene:** commit at logical boundaries as you go — modules → wiring → tests → docs when possible; split unrelated work (e.g. eval harness vs Phase 2 graph tools). Ask before pushing.
 
 ## Learned Workspace Facts
@@ -24,9 +24,9 @@
 - Primary identity primitive: `notebook_id` plus `cell_id` (matches `<pluto-cell id="...">` in the browser).
 - MCP writes server notebook state directly; the browser editor has a separate draft buffer (last-write-wins on server).
 - Visual cell order matters for `add_cell`/`move_cell` placement; execution order for code reasoning in `read_notebook_code`.
-- Structural MCP edits (`add_cell`, `delete_cell`, `move_cell`) must assign a new `cell_order` vector before `_notify_browser` — in-place mutation skips `cell_order` WebSocket patches (see pluto-cursor-bridge `docs/known-issues/plutomcp-cell-order-sync.md`).
+- Structural MCP edits (`add_cell`, `delete_cell`, `move_cell`) must assign a new `cell_order` vector before `_notify_browser` — in-place mutation skips `cell_order` WebSocket patches (see Styx `docs/known-issues/plutomcp-cell-order-sync.md`).
 - `serve()` starts full Pluto frontend (HTTP + MCP); not headless.
 - `serve()` / standalone `connect()` forward `require_secret_for_access` to Pluto `Options` (default `true`); plugin uses `false` on loopback.
-- Cursor plugin spawns bridge via `mcp.json` launcher → `connect()` proxy (D12).
+- Cursor **Styx** plugin spawns bridge via `mcp.json` launcher → `connect()` proxy (D12).
 - Layer 2 graph/validation MCP tools ship here after Phase 1 validates.
-- Deterministic eval gate: `eval/run_reference.jl --all` (no API key); SDK agent eval lives in bridge `eval/run.ts`.
+- Deterministic eval gate: `eval/run_reference.jl --all` (no API key); SDK agent eval lives in [Styx `eval/run.ts`](https://github.com/jowch/styx/blob/main/eval/run.ts).
