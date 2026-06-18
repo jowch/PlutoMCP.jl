@@ -18,7 +18,7 @@ const MCP_TOOLS = [
     ),
     Dict{String,Any}(
         "name"        => "read_cell",
-        "description" => "Return the code, output, and stale flag of a single cell.",
+        "description" => "Return the code, output, stale flag, and structured error (when errored) of a single cell. Errored cells include an error object with kind, hint, and fixes when Pluto recognizes the failure (e.g. pluto_multi_expression).",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(

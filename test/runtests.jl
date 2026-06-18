@@ -254,6 +254,33 @@ end
         @test PlutoMCP._serialize_output(cell) == "boom"
     end
 
+    @testset "_structure_error multi_expression" begin
+        body = Dict{Symbol,Any}(
+            :msg => "syntax: extra token after end of expression\n\nBoundaries: [13, 30]",
+        )
+        err = PlutoMCP._structure_error(body)
+        @test err["kind"] == "pluto_multi_expression"
+        @test err["boundaries"] == [13, 30]
+        @test err["split_count"] == 2
+        @test err["fixes"] == ["split_cells", "wrap_begin_end"]
+        @test occursin("Split this cell into 2 cells", err["hint"])
+    end
+
+    @testset "read_cell structured error" begin
+        session, nb, cells = make_session_with_notebook("using Plots\nplot(sin, 0, 2pi)")
+        cell = cells[1]
+        cell.code = "using Plots\nplot(sin, 0, 2pi)"
+        Pluto.update_save_run!(session, nb, [cell]; run_async=false, save=true)
+        result = PlutoMCP.tool_read_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cell.cell_id),
+        ))
+        @test result["errored"] == true
+        @test haskey(result, "error")
+        @test result["error"]["kind"] == "pluto_multi_expression"
+        @test occursin("begin ... end", result["output"])
+    end
+
     @testset "_serialize_output HTML" begin
         cell = Pluto.Cell(; code="html\"<b>hi</b>\"")
         cell.output = Pluto.CellOutput(body="<b>hi</b>", mime=MIME("text/html"))

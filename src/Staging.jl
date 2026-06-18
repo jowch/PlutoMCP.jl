@@ -73,25 +73,7 @@ function require_fresh_read!(notebook_id::UUID, cell::Pluto.Cell)
 end
 
 function _receipt_output_summary(cell)
-    if cell.errored
-        body = cell.output.body
-        body === nothing && return ""
-        body isa String && return body
-        body isa Dict && return get(body, "msg", sprint(show, body))
-        return sprint(show, body)
-    end
-    body = cell.output.body
-    body === nothing && return ""
-    mime = cell.output.mime
-    if mime == MIME("text/plain") && body isa String
-        return body
-    elseif body isa String
-        return "[$(string(mime)) output, $(sizeof(body)) bytes]"
-    elseif body isa Vector{UInt8}
-        return "[$(string(mime)) output, $(length(body)) bytes]"
-    else
-        return "[$(string(mime)) output]"
-    end
+    _serialize_output(cell)
 end
 
 function _execution_status(nb, cell_ids_run)
@@ -116,10 +98,13 @@ function _mutation_receipt(session, nb; applied, mutation, cell_ids_run=UUID[], 
         cell === nothing && continue
         summary = _receipt_output_summary(cell)
         isempty(summary) && continue
-        push!(outputs_changed, Dict{String,Any}(
-            "cell_id"         => string(cid),
-            "output_summary"  => summary,
-        ))
+        entry = Dict{String,Any}(
+            "cell_id"        => string(cid),
+            "output_summary" => summary,
+        )
+        err = _cell_output_error(cell)
+        err !== nothing && (entry["error"] = err)
+        push!(outputs_changed, entry)
     end
 
     Dict{String,Any}(

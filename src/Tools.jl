@@ -26,28 +26,6 @@ function _get_cell(notebook, cell_id_str)
     return cell
 end
 
-function _serialize_output(cell)
-    if cell.errored
-        body = cell.output.body
-        body === nothing && return ""
-        body isa String && return body
-        body isa Dict && return get(body, "msg", sprint(show, body))
-        return sprint(show, body)
-    end
-    body = cell.output.body
-    body === nothing && return ""
-    mime = cell.output.mime
-    if mime == MIME("text/plain") && body isa String
-        return body
-    elseif body isa String
-        return "[$(string(mime)) output, $(sizeof(body)) bytes]"
-    elseif body isa Vector{UInt8}
-        return "[$(string(mime)) output, $(length(body)) bytes]"
-    else
-        return "[$(string(mime)) output]"
-    end
-end
-
 function _cell_to_dict(cell; notebook_id=nothing)
     d = Dict{String,Any}(
         "cell_id" => string(cell.cell_id),
@@ -57,6 +35,8 @@ function _cell_to_dict(cell; notebook_id=nothing)
         "running" => cell.running,
         "queued"  => cell.queued,
     )
+    err = _cell_output_error(cell)
+    err !== nothing && (d["error"] = err)
     if notebook_id !== nothing
         d["stale"] = is_stale(notebook_id, cell.cell_id)
     end
