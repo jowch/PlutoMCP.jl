@@ -3,8 +3,8 @@
 
 const _RE_CELL_ID = r"pluto-cell#([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"i
 const _RE_NOTEBOOK_ID = r"pluto-notebook#([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"i
-const _RE_GLASS_NOTEBOOK_PATH = r"(?:localhost|127\.0\.0\.1):1234/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"i
-const _RE_GLASS_NOTEBOOK_QUERY = r"(?:localhost|127\.0\.0\.1):1234/\?(?:[^#\s]*&)?id=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"i
+const _RE_GLASS_NOTEBOOK_PATH = r"(?:localhost|127\.0\.0\.1)(?::\d+)?/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"i
+const _RE_GLASS_NOTEBOOK_QUERY = r"(?:localhost|127\.0\.0\.1)(?::\d+)?/\?(?:[^#\s]*&)?id=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"i
 
 function _first_capture(re::Regex, text::AbstractString)
     m = match(re, text)
@@ -57,6 +57,14 @@ function resolve_pluto_context_string(text::AbstractString)
         return Dict{String,Any}(
             "ok"     => false,
             "reason" => "no_pluto_cell_in_context",
+        )
+    end
+
+    if cell_id !== nothing && notebook_id === nothing
+        return Dict{String,Any}(
+            "ok"     => false,
+            "reason" => "notebook_id_missing",
+            "cell_id"=> cell_id,
         )
     end
 
