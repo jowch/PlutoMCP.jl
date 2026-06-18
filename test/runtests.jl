@@ -15,6 +15,15 @@ function make_session_with_notebook(cells...)
     session, nb, nb_cells
 end
 
+function read_cells!(session, nb, cells...)
+    for cell in cells
+        PlutoMCP.tool_read_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cell.cell_id),
+        ))
+    end
+end
+
 # ---------------------------------------------------------------------------
 # Unit tests — no Pluto web server required
 # ---------------------------------------------------------------------------
@@ -29,40 +38,33 @@ end
         @test result[1]["cell_count"] == 1
     end
 
-    @testset "get_notebook_state" begin
-        session, nb, cells = make_session_with_notebook("a = 1", "b = 2")
-        args   = Dict("notebook_id" => string(nb.notebook_id))
-        result = PlutoMCP.tool_get_notebook_state(session, args)
-        @test result["notebook_id"] == string(nb.notebook_id)
-        @test length(result["cells"]) == 2
-        @test result["cells"][1]["code"] == "a = 1"
-        @test result["cells"][2]["code"] == "b = 2"
-    end
-
-    @testset "get_cell" begin
+    @testset "read_cell" begin
         session, nb, cells = make_session_with_notebook("z = 99")
         args   = Dict("notebook_id" => string(nb.notebook_id), "cell_id" => string(cells[1].cell_id))
-        result = PlutoMCP.tool_get_cell(session, args)
+        result = PlutoMCP.tool_read_cell(session, args)
         @test result["cell_id"] == string(cells[1].cell_id)
         @test result["code"] == "z = 99"
+        @test result["stale"] == false
     end
 
     @testset "error on unknown notebook_id" begin
         session, _, _ = make_session_with_notebook("x = 1")
         fake_id = string(uuid4())
-        @test_throws Exception PlutoMCP.tool_get_notebook_state(session,
-            Dict("notebook_id" => fake_id))
+        @test_throws Exception PlutoMCP.tool_read_cell(session,
+            Dict("notebook_id" => fake_id, "cell_id" => string(uuid4())))
     end
 
     @testset "error on unknown cell_id" begin
         session, nb, _ = make_session_with_notebook("x = 1")
         fake_cell_id = string(uuid4())
-        @test_throws Exception PlutoMCP.tool_get_cell(session,
+        @test_throws Exception PlutoMCP.tool_read_cell(session,
             Dict("notebook_id" => string(nb.notebook_id), "cell_id" => fake_cell_id))
     end
 
-    @testset "add_cell appended" begin
-        session, nb, _ = make_session_with_notebook("x = 1")
+    @testset "add_cell appended on empty notebook" begin
+        session  = Pluto.ServerSession()
+        nb       = Pluto.Notebook(Pluto.Cell[], tempname() * ".jl")
+        session.notebooks[nb.notebook_id] = nb
         args = Dict(
             "notebook_id" => string(nb.notebook_id),
             "code"        => "new_var = 42",
@@ -71,12 +73,22 @@ end
         result = PlutoMCP.tool_add_cell(session, args)
         @test haskey(result, "cell_id")
         @test result["code"] == "new_var = 42"
-        @test length(nb.cell_order) == 2
-        @test nb.cell_order[end] == UUID(result["cell_id"])
+        @test length(nb.cell_order) == 1
+        @test nb.cell_order[1] == UUID(result["cell_id"])
+    end
+
+    @testset "add_cell rejects missing placement on non-empty notebook" begin
+        session, nb, _ = make_session_with_notebook("x = 1")
+        args = Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "code"        => "new_var = 42",
+        )
+        @test_throws Exception PlutoMCP.tool_add_cell(session, args)
     end
 
     @testset "add_cell after_cell_id" begin
         session, nb, cells = make_session_with_notebook("first", "last")
+        read_cells!(session, nb, cells[1])
         args = Dict(
             "notebook_id"   => string(nb.notebook_id),
             "code"          => "middle",
@@ -90,14 +102,104 @@ end
 
     @testset "add_cell assigns new cell_order vector" begin
         session, nb, cells = make_session_with_notebook("first", "last")
+        read_cells!(session, nb, cells[2])
         order_before = nb.cell_order
         args = Dict(
-            "notebook_id" => string(nb.notebook_id),
-            "code"        => "tail",
-            "run_after"   => false,
+            "notebook_id"   => string(nb.notebook_id),
+            "code"          => "tail",
+            "after_cell_id" => string(cells[2].cell_id),
+            "run_after"     => false,
         )
         PlutoMCP.tool_add_cell(session, args)
         @test nb.cell_order !== order_before
+    end
+
+    @testset "edit_cell default does not execute" begin
+        session, nb, cells = make_session_with_notebook("x = 1", "y = x")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+
+        cell_y = cells[2]
+        @test PlutoMCP._serialize_output(cell_y) == "1"
+
+        read_cells!(session, nb, cells[1])
+        result = PlutoMCP.tool_edit_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "code"        => "x = 10",
+        ))
+        @test result["stale"] == true
+        @test PlutoMCP._serialize_output(cell_y) == "1"
+        @test result["pending_run"] == [string(cells[1].cell_id)]
+    end
+
+    @testset "submit_changes runs staged cells" begin
+        session, nb, cells = make_session_with_notebook("x = 1", "y = x")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+
+        read_cells!(session, nb, cells[1])
+        PlutoMCP.tool_edit_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "code"        => "x = 10",
+        ))
+
+        receipt = PlutoMCP.tool_submit_changes(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+        ))
+        @test receipt["applied"] == true
+        @test string(cells[1].cell_id) ∈ receipt["affected_cells"]
+        @test isempty(receipt["pending_run"])
+
+        cell_y = cells[2]
+        @test PlutoMCP._serialize_output(cell_y) == "10"
+    end
+
+    @testset "read-before-edit guard" begin
+        session, nb, cells = make_session_with_notebook("x = 1", "y = x")
+
+        @test_throws Exception PlutoMCP.tool_edit_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "code"        => "x = 2",
+        ))
+
+        read_cells!(session, nb, cells[1])
+        result = PlutoMCP.tool_edit_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "code"        => "x = 2",
+        ))
+        @test result["code"] == "x = 2"
+
+        cells[1].code = "x = 99"
+        @test_throws Exception PlutoMCP.tool_edit_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "code"        => "x = 3",
+        ))
+
+        PlutoMCP.tool_read_notebook_code(session,
+            Dict("notebook_id" => string(nb.notebook_id)))
+        result2 = PlutoMCP.tool_edit_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "code"        => "x = 3",
+        ))
+        @test result2["code"] == "x = 3"
+
+        session2, nb2, cells2 = make_session_with_notebook("a = 1")
+        @test_throws Exception PlutoMCP.tool_add_cell(session2, Dict(
+            "notebook_id"   => string(nb2.notebook_id),
+            "code"          => "b = 2",
+            "after_cell_id" => string(cells2[1].cell_id),
+        ))
+        read_cells!(session2, nb2, cells2[1])
+        add_result = PlutoMCP.tool_add_cell(session2, Dict(
+            "notebook_id"   => string(nb2.notebook_id),
+            "code"          => "b = 2",
+            "after_cell_id" => string(cells2[1].cell_id),
+        ))
+        @test add_result["code"] == "b = 2"
     end
 
     @testset "delete_cell" begin
@@ -107,7 +209,7 @@ end
             "cell_id"     => string(cells[1].cell_id),
         )
         result = PlutoMCP.tool_delete_cell(session, args)
-        @test result["deleted"] == true
+        @test result["applied"] == true
         @test length(nb.cell_order) == 1
         @test !haskey(nb.cells_dict, cells[1].cell_id)
     end
@@ -204,14 +306,20 @@ end
         resp  = read_resp(buf_out)
         names = [t["name"] for t in resp["result"]["tools"]]
 
-        @test "list_notebooks"     ∈ names
-        @test "get_notebook_state" ∈ names
-        @test "set_cell_code"      ∈ names
-        @test "add_cell"           ∈ names
-        @test "delete_cell"        ∈ names
-        @test "run_cell"           ∈ names
-        @test "run_all_cells"      ∈ names
-        @test "move_cell"          ∈ names
+        @test "list_notebooks"  ∈ names
+        @test "read_cell"       ∈ names
+        @test "edit_cell"       ∈ names
+        @test "edit_cells"      ∈ names
+        @test "submit_changes"  ∈ names
+        @test "execute_cell"    ∈ names
+        @test "add_cell"        ∈ names
+        @test "delete_cell"     ∈ names
+        @test "run_all_cells"   ∈ names
+        @test "move_cell"       ∈ names
+        @test !("get_notebook_state" ∈ names)
+        @test !("get_cell" ∈ names)
+        @test !("set_cell_code" ∈ names)
+        @test !("run_cell" ∈ names)
     end
 
     @testset "MCP protocol: tools/call list_notebooks" begin
@@ -253,7 +361,7 @@ end
     # Integration test — real Pluto session, Julia API only (no MCP stdio)
     # ---------------------------------------------------------------------------
 
-    @testset "Integration: set_cell_code triggers reactivity" begin
+    @testset "Integration: edit_cell run_after triggers reactivity" begin
         fixture = joinpath(@__DIR__, "fixtures", "test_notebook.jl")
         @test isfile(fixture)
 
@@ -273,25 +381,161 @@ end
         cell_y_id = "22222222-2222-2222-2222-222222222222"
 
         # After open, cells should have run: x=6, y=6*7=42
-        result_y = PlutoMCP.tool_get_cell(session,
+        result_y = PlutoMCP.tool_read_cell(session,
             Dict("notebook_id" => string(nb.notebook_id), "cell_id" => cell_y_id))
         @test result_y["output"] == "42"
 
         # Change x; Pluto reactivity re-evaluates y = 10 * 7 = 70
-        PlutoMCP.tool_set_cell_code(session, Dict(
+        PlutoMCP.tool_read_cell(session,
+            Dict("notebook_id" => string(nb.notebook_id), "cell_id" => cell_x_id))
+        PlutoMCP.tool_edit_cell(session, Dict(
             "notebook_id" => string(nb.notebook_id),
             "cell_id"     => cell_x_id,
             "code"        => "x = 10",
             "run_after"   => true,
         ))
 
-        result_y2 = PlutoMCP.tool_get_cell(session,
+        result_y2 = PlutoMCP.tool_read_cell(session,
             Dict("notebook_id" => string(nb.notebook_id), "cell_id" => cell_y_id))
         @test result_y2["output"] == "70"
 
         # Teardown — shut down notebook; let the async Pluto task finish on its own
         Pluto.SessionActions.shutdown(session, nb; async=false, verbose=false)
         try; schedule(pluto_task, InterruptException(); error=true); catch; end
+    end
+
+    @testset "edit_cells stages multiple cells without executing" begin
+        session, nb, cells = make_session_with_notebook("a = 1", "b = 2", "c = a + b")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+
+        cell_c = cells[3]
+        @test PlutoMCP._serialize_output(cell_c) == "3"
+
+        read_cells!(session, nb, cells[1], cells[2])
+        receipt = PlutoMCP.tool_edit_cells(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cells"       => [
+                Dict("cell_id" => string(cells[1].cell_id), "code" => "a = 10"),
+                Dict("cell_id" => string(cells[2].cell_id), "code" => "b = 20"),
+            ],
+        ))
+        @test receipt["applied"] == true
+        @test receipt["mutation"]["type"] == "edit_cells"
+        @test length(receipt["pending_run"]) == 2
+        @test PlutoMCP._serialize_output(cell_c) == "3"
+        @test receipt["execution"]["status"] == "completed"
+    end
+
+    @testset "delete_cell returns mutation receipt" begin
+        session, nb, cells = make_session_with_notebook("x = 1", "y = 2")
+        result = PlutoMCP.tool_delete_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+        ))
+        @test result["applied"] == true
+        @test result["mutation"]["type"] == "delete_cell"
+        @test haskey(result, "cell_order")
+    end
+
+    @testset "move_cell receipt includes cell_order" begin
+        session, nb, cells = make_session_with_notebook("first", "second", "third")
+        receipt = PlutoMCP.tool_move_cell(session, Dict(
+            "notebook_id"   => string(nb.notebook_id),
+            "cell_id"       => string(cells[3].cell_id),
+            "after_cell_id" => "",
+        ))
+        @test receipt["applied"] == true
+        @test receipt["cell_order"] == [string(id) for id in nb.cell_order]
+        @test receipt["mutation"]["old_index"] == 3
+        @test receipt["mutation"]["new_index"] == 1
+    end
+
+    @testset "execute_cell receipt has execution status" begin
+        session, nb, cells = make_session_with_notebook("x = 1")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+
+        receipt = PlutoMCP.tool_execute_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+        ))
+        @test receipt["applied"] == true
+        @test receipt["execution"]["status"] == "completed"
+        @test string(cells[1].cell_id) ∈ receipt["affected_cells"]
+    end
+
+    @testset "read_notebook_code execution order" begin
+        fixture = joinpath(@__DIR__, "fixtures", "test_notebook.jl")
+        session = Pluto.ServerSession()
+        nb      = Pluto.load_notebook_nobackup(fixture)
+        session.notebooks[nb.notebook_id] = nb
+        Pluto.update_dependency_cache!(nb)
+
+        result = PlutoMCP.tool_read_notebook_code(session,
+            Dict("notebook_id" => string(nb.notebook_id)))
+
+        @test result["order"] == "execution"
+        @test result["cell_ids"] == [
+            "11111111-1111-1111-1111-111111111111",
+            "22222222-2222-2222-2222-222222222222",
+        ]
+        @test occursin("# ╔═╡ 11111111-1111-1111-1111-111111111111", result["code"])
+        @test occursin("x = 6", result["code"])
+        @test occursin("y = x * 7", result["code"])
+    end
+
+    @testset "read_notebook_code empty cell" begin
+        session, nb, cells = make_session_with_notebook("x = 1", "")
+        Pluto.update_dependency_cache!(nb)
+
+        result = PlutoMCP.tool_read_notebook_code(session,
+            Dict("notebook_id" => string(nb.notebook_id)))
+
+        @test string(cells[2].cell_id) ∈ result["cell_ids"]
+        @test occursin("# ╔═╡ $(cells[2].cell_id)", result["code"])
+        @test occursin("# (empty)", result["code"])
+    end
+
+    @testset "get_cell_order vs get_execution_order" begin
+        cell_z = Pluto.Cell(; cell_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), code="z = 10")
+        cell_w = Pluto.Cell(; cell_id=UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"), code="w = z + 1")
+        session = Pluto.ServerSession()
+        nb      = Pluto.Notebook([cell_z, cell_w], tempname() * ".jl")
+        nb.cell_order = [cell_w.cell_id, cell_z.cell_id]
+        session.notebooks[nb.notebook_id] = nb
+        Pluto.update_dependency_cache!(nb)
+
+        visual = PlutoMCP.tool_get_cell_order(session,
+            Dict("notebook_id" => string(nb.notebook_id)))
+        exec = PlutoMCP.tool_get_execution_order(session,
+            Dict("notebook_id" => string(nb.notebook_id)))
+
+        @test visual["cell_ids"] == [
+            "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        ]
+        @test exec["cell_ids"] == [
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        ]
+    end
+
+    @testset "MCP protocol: tools/list projection tools" begin
+        session, _, _ = make_session_with_notebook("x = 1")
+
+        buf_in  = IOBuffer()
+        buf_out = IOBuffer()
+
+        write_msg(buf_in, Dict("jsonrpc" => "2.0", "id" => 5, "method" => "tools/list", "params" => Dict()))
+        seekstart(buf_in)
+
+        PlutoMCP.run_mcp_server(session, buf_in, buf_out)
+
+        resp  = read_resp(buf_out)
+        names = [t["name"] for t in resp["result"]["tools"]]
+
+        @test "read_notebook_code"  ∈ names
+        @test "get_cell_order"      ∈ names
+        @test "get_execution_order" ∈ names
     end
 
 end
