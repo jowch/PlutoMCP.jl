@@ -305,15 +305,17 @@ MCP tool results are plain text, so rich cell outputs are serialized as follows:
 
 ---
 
-## Agent eval harness
+## Optional eval trace logging
 
-See [`eval/README.md`](eval/README.md) for the full harness.
+For agent eval harnesses (see [Styx `eval/`](https://github.com/jowch/styx/tree/main/eval)), enable server-side tool-call tracing:
 
-- **Reference runner (CI):** `julia --project=. eval/run_reference.jl --all` — golden-path tool sequences via HTTP `/call`, no API key
-- **Scoring:** `eval/lib/EvalShared.jl` (`run_score`) — outcome (strict) + trace (advisory, `--strict-trace` to gate) from server-side `eval_log` jsonl
-- **SDK eval** lives in [Styx `eval/`](https://github.com/jowch/styx/tree/main/eval) — Cursor SDK orchestrator (`CURSOR_API_KEY`).
+```julia
+PlutoMCP.serve(notebook="my_nb.jl", eval_log="/tmp/trace.jsonl", eval_run_id="run-1")
+```
 
-Eval kwargs on `serve()`: `eval_log`, `eval_run_id`, `eval_redact_code`. Or env vars `PLUTOMCP_EVAL_LOG`, `PLUTOMCP_EVAL_RUN_ID`.
+Kwargs: `eval_log`, `eval_run_id`, `eval_redact_code`. Or env vars `PLUTOMCP_EVAL_LOG`, `PLUTOMCP_EVAL_RUN_ID`, `PLUTOMCP_EVAL_REDACT_CODE`.
+
+Scenarios, fixtures, reference runner, and SDK orchestration live in the Styx plugin repo — not here — to keep the MCP server surface minimal for upstream.
 
 ---
 

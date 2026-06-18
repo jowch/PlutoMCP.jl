@@ -29,4 +29,4 @@
 - `serve()` / standalone `connect()` forward `require_secret_for_access` to Pluto `Options` (default `true`); plugin uses `false` on loopback.
 - Cursor **Styx** plugin spawns bridge via `mcp.json` launcher → `connect()` proxy (D12).
 - Layer 2 graph/validation MCP tools ship here after Phase 1 validates.
-- Deterministic eval gate: `eval/run_reference.jl --all` (no API key); SDK agent eval lives in [Styx `eval/run.ts`](https://github.com/jowch/styx/blob/main/eval/run.ts).
+- Deterministic eval gate lives in [Styx `eval/`](https://github.com/jowch/styx/tree/main/eval) (`run_reference.jl --all`); PlutoMCP keeps optional `EvalLog.jl` hook only.
