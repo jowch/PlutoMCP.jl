@@ -12,6 +12,7 @@
 - Omit markdown, manifest blobs, and `@bind` scaffolding from default `read_notebook_code` projection.
 - Ground Pluto projection rules on real notebook artifacts in a gitignored `reference/` directory.
 - `@bind` must be last expression in cell (widget in output); show bound value in a separate cell.
+- **Commit hygiene:** commit at logical boundaries as you go — modules → wiring → tests → docs when possible; split unrelated work (e.g. eval harness vs Phase 2 graph tools). Ask before pushing.
 
 ## Learned Workspace Facts
 
