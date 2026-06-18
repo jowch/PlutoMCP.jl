@@ -29,7 +29,25 @@ function parse_cli_args(defaults=Dict{String,String}())
 end
 
 function load_scenario(path::String)
-    JSON3.read(read(path, String), Dict{String,Any})
+    scenario = JSON3.read(read(path, String), Dict{String,Any})
+    validate_scenario!(scenario)
+    return scenario
+end
+
+function validate_scenario!(scenario::Dict{String,Any})
+    for key in ("id", "version", "prompt", "fixture", "outcome")
+        haskey(scenario, key) || error("Scenario missing required key: $key")
+    end
+    outcome = scenario["outcome"]
+    haskey(outcome, "claims") || error("Scenario outcome missing claims")
+    ref = get(scenario, "golden_trace_ref", nothing)
+    if ref !== nothing
+        golden = abspath(joinpath(EVAL_ROOT, string(ref)))
+        root = abspath(EVAL_ROOT)
+        startswith(golden, root) || error("golden_trace_ref escapes eval root: $ref")
+        isfile(golden) || error("golden_trace_ref missing file: $golden")
+    end
+    return scenario
 end
 
 function scenario_path(id_or_path::String)
@@ -65,13 +83,6 @@ function mcp_call(base_url::String, name::String, arguments::Dict{String,Any}; i
     text = content[1]["text"]
     parsed = JSON3.read(text)
     return result, parsed, is_error
-end
-
-function tool_result_data(parsed, is_error::Bool)
-    if is_error && parsed isa Dict
-        return parsed
-    end
-    return parsed
 end
 
 function wait_health(base_url::String; timeout_sec=30.0)
@@ -131,7 +142,9 @@ function substitute_notebook_id(obj, notebook_id::String)
 end
 
 function load_trace_entries(log_path::Union{String,Nothing})
-    log_path === nothing || !isfile(log_path) && return Dict{String,Any}[]
+    if log_path === nothing || !isfile(log_path)
+        return Dict{String,Any}[]
+    end
     lines = filter(!isempty, split(read(log_path, String), '\n'))
     return [JSON3.read(line, Dict{String,Any}) for line in lines]
 end
@@ -221,7 +234,7 @@ function score_outcome(base_url::String, scenario::Dict{String,Any}; notebook_id
 end
 
 const _MUTATING = Set(["edit_cell", "edit_cells", "add_cell", "delete_cell", "move_cell"])
-const _READS = Set(["read_cell", "read_notebook_code"])
+const _READ_TOOLS = Set(["read_cell", "read_notebook_code"])
 
 function _tool_matches(pattern::String, tool::String)
     for part in split(pattern, '|')
@@ -275,6 +288,20 @@ function score_trace(entries, trace::Union{Dict,Nothing}; strict_read_guard=fals
         n = count(==( "execute_cell"), tools)
         n > max_exec && begin
             push!(diagnostics, "execute_cell count $n > max $max_exec")
+            pass = false
+        end
+    end
+
+    max_run_after = get(trace, "max_run_after", nothing)
+    if max_run_after !== nothing
+        n = count(entries) do e
+            tool = string(e["tool"])
+            tool in ("edit_cell", "add_cell") || return false
+            args = get(e, "args", Dict())
+            get(args, "run_after", false) == true
+        end
+        n > max_run_after && begin
+            push!(diagnostics, "run_after count $n > max $max_run_after")
             pass = false
         end
     end
@@ -355,6 +382,9 @@ function run_score(; scenario_path, log_path=nothing, mcp_url, meta_path=nothing
     exit_code = outcome_pass ? 0 : 1
     if strict_trace && !trace_pass
         exit_code = 1
+    end
+    if !trace_pass
+        report["trace_diagnostics"] = trace["diagnostics"]
     end
     return report, exit_code
 end

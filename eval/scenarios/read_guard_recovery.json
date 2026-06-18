@@ -29,7 +29,8 @@
     "must_include_subsequence": ["edit_cell", "read_cell|read_notebook_code", "submit_changes"],
     "expect_read_required_error": true,
     "read_before_first_edit": false,
-    "max_execute_cell": 0
+    "max_execute_cell": 0,
+    "max_run_after": 0
   },
   "reference_sequence": [
     { "tool": "list_notebooks", "arguments": {} },

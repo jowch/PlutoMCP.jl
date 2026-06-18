@@ -20,6 +20,8 @@
   "outcome": {
     "expect_notebooks": 1,
     "claims": [
+      { "type": "cell_code_contains", "cell_id": "33333333-3333-3333-3333-333333333333", "substring": "a = 10", "weight": 1 },
+      { "type": "cell_code_contains", "cell_id": "44444444-4444-4444-4444-444444444444", "substring": "b = 20", "weight": 1 },
       { "type": "cell_output", "cell_id": "55555555-5555-5555-5555-555555555555", "equals": "30", "weight": 1 },
       { "type": "pending_run_empty", "weight": 1 }
     ],
@@ -29,6 +31,7 @@
     "must_include_subsequence": ["read_notebook_code|read_cell", "edit_cells|edit_cell", "submit_changes"],
     "must_not_include": ["run_all_cells"],
     "max_execute_cell": 0,
+    "max_run_after": 0,
     "read_before_first_edit": true
   },
   "reference_sequence": [

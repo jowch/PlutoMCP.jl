@@ -30,7 +30,8 @@
     "must_include_subsequence": ["read_cell|read_notebook_code", "add_cell", "submit_changes"],
     "must_not_include": ["run_all_cells"],
     "read_before_first_edit": true,
-    "max_execute_cell": 0
+    "max_execute_cell": 0,
+    "max_run_after": 0
   },
   "reference_sequence": [
     { "tool": "list_notebooks", "arguments": {} },

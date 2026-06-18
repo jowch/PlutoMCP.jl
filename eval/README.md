@@ -10,8 +10,7 @@ eval/
   fixtures/                  # notebooks with stable cell UUIDs
   scenarios/                 # task specs + rubrics
   golden/                    # optional expert traces (diagnostic only)
-  lib/EvalShared.jl          # shared scoring helpers
-  score.jl                   # outcome + trace grader
+  lib/EvalShared.jl          # shared scoring helpers (score_trace, run_score)
   run_reference.jl           # SWE-bench-style gold runner (no agent)
   results/                   # gitignored run artifacts
 ```
@@ -29,13 +28,21 @@ All four v1 scenarios run in CI via `test/runtests.jl`.
 
 ## Scoring
 
+Scoring runs inside `run_reference.jl` via `run_score` in `lib/EvalShared.jl`. To re-score an existing trace:
+
 ```bash
-julia --project=. eval/score.jl \
-  --scenario stage_and_run \
-  --log eval/results/<run_id>/trace.jsonl \
-  --mcp-url http://127.0.0.1:<port> \
-  [--meta eval/results/<run_id>/meta.json] \
-  [--strict-trace]
+julia --project=. -e '
+  include("eval/lib/EvalShared.jl")
+  report, code = run_score(
+    scenario_path = "eval/scenarios/stage_and_run.json",
+    log_path      = "eval/results/<run_id>/trace.jsonl",
+    mcp_url       = "http://127.0.0.1:<port>",
+    meta_path     = "eval/results/<run_id>/meta.json",
+    strict_trace  = true,
+  )
+  println(JSON3.write(report))
+  exit(code)
+'
 ```
 
 - **Outcome** (strict): claim checks on live notebook state via `/call`

@@ -1,14 +1,16 @@
 #!/usr/bin/env julia
 # Golden-path reference runner: executes canonical tool sequences via HTTP /call.
 
-using Pkg
-Pkg.activate(dirname(@__DIR__))
+if abspath(PROGRAM_FILE) == @__FILE__
+    using Pkg
+    Pkg.activate(dirname(@__DIR__))
+end
 
 include(joinpath(@__DIR__, "lib", "EvalShared.jl"))
 using JSON3
 using Sockets
 
-function spawn_serve!(fixture_path::String; pluto_port, mcp_port, eval_log, run_id, setup)
+function spawn_serve!(fixture_path::String; pluto_port, mcp_port, eval_log, run_id, setup, serve_stderr=nothing)
     req_secret = get(setup, "require_secret_for_access", false)
     launch_browser = get(setup, "launch_browser", false)
     proj = dirname(@__DIR__)
@@ -24,8 +26,9 @@ function spawn_serve!(fixture_path::String; pluto_port, mcp_port, eval_log, run_
         eval_run_id = $(repr(run_id)),
     )
     """
-    cmd = `julia --project=$proj -e $code`
-    return run(pipeline(cmd, stdout=devnull, stderr=devnull), wait=false)
+    stderr_target = serve_stderr === nothing ? devnull : serve_stderr
+    cmd = `$(joinpath(Sys.BINDIR, Base.julia_exename())) --project=$proj -e $code`
+    return run(pipeline(cmd, stdout=devnull, stderr=stderr_target), wait=false)
 end
 
 function kill_proc!(proc)
@@ -79,7 +82,8 @@ function run_one_scenario(scenario_file::String; strict_trace=false)
     setup = get(scenario, "setup", Dict{String,Any}())
     mcp_url = "http://127.0.0.1:$mcp_port"
 
-    proc = spawn_serve!(tmp; pluto_port, mcp_port, eval_log, run_id, setup)
+    proc = spawn_serve!(tmp; pluto_port, mcp_port, eval_log, run_id, setup,
+        serve_stderr=joinpath(results_dir, "serve.stderr"))
     try
         wait_health(mcp_url; timeout_sec=60) || error("Health check failed for $sid")
         notebook_id = wait_readiness(mcp_url, scenario)
@@ -110,6 +114,9 @@ function run_one_scenario(scenario_file::String; strict_trace=false)
             write(io, JSON3.write(report))
         end
         println("[$sid] outcome=$(report["outcome"]["pass"]) trace=$(report["trace"]["pass"]) → $summary_path")
+        if !report["trace"]["pass"]
+            println(stderr, "[$sid] trace diagnostics: $(join(report["trace"]["diagnostics"], "; "))")
+        end
         return exit_code == 0
     finally
         kill_proc!(proc)
@@ -127,16 +134,9 @@ function main()
     opts = parse_cli_args()
     strict = haskey(opts, "strict-trace")
     if haskey(opts, "all")
-        files = all_scenario_files()
-        failed = String[]
-        for f in files
-            ok = run_one_scenario(f; strict_trace=strict)
-            ok || push!(failed, basename(f))
-        end
-        isempty(failed) || begin
-            error("Reference runner failed: $(join(failed, ", "))")
-        end
-        println("All $(length(files)) reference scenarios passed.")
+        ok, failed = run_all_reference(; strict_trace=strict)
+        ok || error("Reference runner failed: $(join(failed, ", "))")
+        println("All reference scenarios passed.")
         return
     end
     scenario_arg = get(opts, "scenario", "stage_and_run")
@@ -145,4 +145,20 @@ function main()
     ok || exit(1)
 end
 
-main()
+function run_all_reference(; strict_trace=false)
+    files = all_scenario_files()
+    failed = String[]
+    for f in files
+        ok = run_one_scenario(f; strict_trace=strict_trace)
+        ok || push!(failed, basename(f))
+    end
+    if isempty(failed)
+        println("All $(length(files)) reference scenarios passed.")
+        return true, failed
+    end
+    return false, failed
+end
+
+if abspath(PROGRAM_FILE) == @__FILE__
+    main()
+end

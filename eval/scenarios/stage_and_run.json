@@ -30,9 +30,9 @@
     "must_include_subsequence": ["read_notebook_code|read_cell", "edit_cell|edit_cells", "submit_changes"],
     "must_not_include": ["run_all_cells"],
     "max_execute_cell": 0,
+    "max_run_after": 0,
     "read_before_first_edit": true
   },
-  "golden_trace_ref": "golden/stage_and_run.jsonl",
   "reference_sequence": [
     { "tool": "list_notebooks", "arguments": {} },
     { "tool": "read_notebook_code", "arguments": { "notebook_id": "$notebook_id" } },
