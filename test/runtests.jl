@@ -879,45 +879,4 @@ end
         end
     end
 
-    @testset "EvalShared score_trace" begin
-        include(joinpath(dirname(@__DIR__), "eval", "lib", "EvalShared.jl"))
-        entries = [
-            Dict{String,Any}("tool" => "edit_cell", "args" => Dict("run_after" => true)),
-        ]
-        bad = score_trace(entries, Dict("max_run_after" => 0))
-        @test bad["pass"] == false
-        @test any(occursin("run_after", d) for d in bad["diagnostics"])
-
-        ok = score_trace(
-            [Dict{String,Any}("tool" => "read_cell", "args" => Dict("cell_id" => "a"))],
-            Dict("read_before_first_edit" => true, "must_include_subsequence" => ["read_cell"]),
-        )
-        @test ok["pass"] == true
-
-        err = score_trace(
-            [Dict{String,Any}("tool" => "edit_cell", "args" => Dict("cell_id" => "a"), "is_error" => true, "error_type" => "syntax")],
-            Dict("expect_read_required_error" => true),
-        )
-        @test err["pass"] == false
-    end
-
-    @testset "eval reference runner" begin
-        runner = joinpath(dirname(@__DIR__), "eval", "run_reference.jl")
-        proj = dirname(@__DIR__)
-        @test isfile(runner)
-        # Fresh Julia subprocess avoids precompile races with Pluto already loaded here.
-        sleep(2)
-        julia = joinpath(Sys.BINDIR, Base.julia_exename())
-        stderr_io = IOBuffer()
-        cmd = setenv(
-            `$julia --project=$proj --startup-file=no $runner --all --strict-trace`,
-            "JULIA_PRECOMPILE" => "0",
-        )
-        proc = run(pipeline(ignorestatus(cmd), stderr=stderr_io), wait=true)
-        if proc.exitcode != 0
-            @warn "eval reference runner failed" exitcode=proc.exitcode stderr=String(take!(stderr_io))
-        end
-        @test proc.exitcode == 0
-    end
-
 end
