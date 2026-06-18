@@ -1,9 +1,14 @@
 # Per-session staging state: cells edited but not yet executed via submit_changes.
 
+const _STAGING_LOCK = ReentrantLock()
 const _pending_run = Dict{UUID, Set{UUID}}()
-
-# Read-before-edit receipts: code snapshot at last read_cell / read_notebook_code.
 const _read_receipts = Dict{UUID, Dict{UUID, String}}()
+
+function _with_staging_lock(f)
+    lock(_STAGING_LOCK) do
+        return f()
+    end
+end
 
 function _pending_for(notebook_id::UUID)
     get!(_pending_run, notebook_id) do
@@ -12,30 +17,61 @@ function _pending_for(notebook_id::UUID)
 end
 
 function mark_pending!(notebook_id::UUID, cell_id::UUID)
-    push!(_pending_for(notebook_id), cell_id)
+    _with_staging_lock() do
+        push!(_pending_for(notebook_id), cell_id)
+    end
     return nothing
 end
 
 function clear_pending!(notebook_id::UUID, cell_ids)
-    pending = get(_pending_run, notebook_id, nothing)
-    pending === nothing && return nothing
-    for cid in cell_ids
-        delete!(pending, cid)
+    _with_staging_lock() do
+        pending = get(_pending_run, notebook_id, nothing)
+        pending === nothing && return nothing
+        for cid in cell_ids
+            delete!(pending, cid)
+        end
+        isempty(pending) && delete!(_pending_run, notebook_id)
     end
-    isempty(pending) && delete!(_pending_run, notebook_id)
+    return nothing
+end
+
+function clear_all_pending!(notebook_id::UUID)
+    _with_staging_lock() do
+        delete!(_pending_run, notebook_id)
+    end
+    return nothing
+end
+
+function clear_notebook_staging!(notebook_id::UUID)
+    _with_staging_lock() do
+        delete!(_pending_run, notebook_id)
+        delete!(_read_receipts, notebook_id)
+    end
+    return nothing
+end
+
+function reset_staging_state!()
+    _with_staging_lock() do
+        empty!(_pending_run)
+        empty!(_read_receipts)
+    end
     return nothing
 end
 
 function pending_run_ids(notebook_id::UUID)
-    pending = get(_pending_run, notebook_id, nothing)
-    pending === nothing && return UUID[]
-    return collect(pending)
+    _with_staging_lock() do
+        pending = get(_pending_run, notebook_id, nothing)
+        pending === nothing && return UUID[]
+        return collect(pending)
+    end
 end
 
 function is_stale(notebook_id::UUID, cell_id::UUID)
-    pending = get(_pending_run, notebook_id, nothing)
-    pending === nothing && return false
-    return cell_id in pending
+    _with_staging_lock() do
+        pending = get(_pending_run, notebook_id, nothing)
+        pending === nothing && return false
+        return cell_id in pending
+    end
 end
 
 function _read_receipts_for(notebook_id::UUID)
@@ -45,29 +81,35 @@ function _read_receipts_for(notebook_id::UUID)
 end
 
 function record_read!(notebook_id::UUID, cell_id::UUID, code::String)
-    _read_receipts_for(notebook_id)[cell_id] = code
+    _with_staging_lock() do
+        _read_receipts_for(notebook_id)[cell_id] = code
+    end
     return nothing
 end
 
 function clear_read_receipt!(notebook_id::UUID, cell_id::UUID)
-    receipts = get(_read_receipts, notebook_id, nothing)
-    receipts === nothing && return nothing
-    delete!(receipts, cell_id)
-    isempty(receipts) && delete!(_read_receipts, notebook_id)
+    _with_staging_lock() do
+        receipts = get(_read_receipts, notebook_id, nothing)
+        receipts === nothing && return nothing
+        delete!(receipts, cell_id)
+        isempty(receipts) && delete!(_read_receipts, notebook_id)
+    end
     return nothing
 end
 
 function require_fresh_read!(notebook_id::UUID, cell::Pluto.Cell)
-    receipts = get(_read_receipts, notebook_id, nothing)
-    if receipts === nothing || !haskey(receipts, cell.cell_id)
-        throw(ArgumentError(
-            "read_required::Call read_cell or read_notebook_code before editing cell $(cell.cell_id)"
-        ))
-    end
-    if receipts[cell.cell_id] != cell.code
-        throw(ArgumentError(
-            "stale_read::Cell $(cell.cell_id) changed since last read; call read_cell again"
-        ))
+    _with_staging_lock() do
+        receipts = get(_read_receipts, notebook_id, nothing)
+        if receipts === nothing || !haskey(receipts, cell.cell_id)
+            throw(ArgumentError(
+                "read_required::Call read_cell or read_notebook_code before editing cell $(cell.cell_id)"
+            ))
+        end
+        if receipts[cell.cell_id] != cell.code
+            throw(ArgumentError(
+                "stale_read::Cell $(cell.cell_id) changed since last read; call read_cell again"
+            ))
+        end
     end
     return nothing
 end
@@ -76,8 +118,12 @@ function _receipt_output_summary(cell)
     _serialize_output(cell)
 end
 
-function _execution_status(nb, cell_ids_run)
-    isempty(cell_ids_run) && return "completed"
+function _execution_status(nb, cell_ids_run; warnings=String[])
+    any(x -> startswith(x, "execution_timeout::"), warnings) && return "timeout"
+    any(x -> startswith(x, "async_execution::"), warnings) && return "running"
+    if isempty(cell_ids_run)
+        return "staged"
+    end
     any_errored = false
     any_running = false
     for cid in cell_ids_run
@@ -91,7 +137,7 @@ function _execution_status(nb, cell_ids_run)
     return "completed"
 end
 
-function _mutation_receipt(session, nb; applied, mutation, cell_ids_run=UUID[], warnings=String[])
+function _mutation_receipt(session, nb; applied, mutation, cell_ids_run=UUID[], warnings=String[], execution_status=nothing)
     outputs_changed = Dict{String,Any}[]
     for cid in cell_ids_run
         cell = get(nb.cells_dict, cid, nothing)
@@ -107,19 +153,19 @@ function _mutation_receipt(session, nb; applied, mutation, cell_ids_run=UUID[], 
         push!(outputs_changed, entry)
     end
 
+    status = execution_status === nothing ?
+        _execution_status(nb, cell_ids_run; warnings) :
+        execution_status
+
     Dict{String,Any}(
         "applied"          => applied,
         "mutation"         => mutation,
         "cell_order"       => [string(id) for id in nb.cell_order],
         "execution_order"  => [string(c.cell_id) for c in collect(Pluto.topological_order(nb))],
         "affected_cells"   => [string(id) for id in cell_ids_run],
-        "execution"        => Dict{String,Any}("status" => _execution_status(nb, cell_ids_run)),
+        "execution"        => Dict{String,Any}("status" => status),
         "outputs"          => Dict{String,Any}("changed" => outputs_changed),
         "pending_run"      => [string(id) for id in pending_run_ids(nb.notebook_id)],
         "warnings"         => warnings,
     )
-end
-
-function _compact_receipt(session, nb; applied, mutation, cell_ids_run=UUID[], warnings=String[])
-    _mutation_receipt(session, nb; applied, mutation, cell_ids_run, warnings)
 end
