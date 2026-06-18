@@ -188,6 +188,79 @@ const MCP_TOOLS = [
             "required" => ["notebook_id"],
         ),
     ),
+    Dict{String,Any}(
+        "name"        => "get_cell_dependencies",
+        "description" => "Return upstream cell IDs and referenced symbols for a cell. For reactivity debugging, not the default edit workflow.",
+        "inputSchema" => Dict{String,Any}(
+            "type"       => "object",
+            "properties" => Dict{String,Any}(
+                "notebook_id" => Dict("type" => "string", "description" => "The notebook UUID."),
+                "cell_id"     => Dict("type" => "string", "description" => "The cell UUID."),
+            ),
+            "required" => ["notebook_id", "cell_id"],
+        ),
+    ),
+    Dict{String,Any}(
+        "name"        => "get_cell_dependents",
+        "description" => "Return downstream cell IDs that would re-run if this cell changes (transitive). For reactivity debugging.",
+        "inputSchema" => Dict{String,Any}(
+            "type"       => "object",
+            "properties" => Dict{String,Any}(
+                "notebook_id" => Dict("type" => "string", "description" => "The notebook UUID."),
+                "cell_id"     => Dict("type" => "string", "description" => "The cell UUID."),
+            ),
+            "required" => ["notebook_id", "cell_id"],
+        ),
+    ),
+    Dict{String,Any}(
+        "name"        => "find_symbol_definitions",
+        "description" => "Find cells where a symbol is defined (semantic analysis). For debugging, not default workflow.",
+        "inputSchema" => Dict{String,Any}(
+            "type"       => "object",
+            "properties" => Dict{String,Any}(
+                "notebook_id" => Dict("type" => "string", "description" => "The notebook UUID."),
+                "symbol"      => Dict("type" => "string", "description" => "Symbol name to look up."),
+            ),
+            "required" => ["notebook_id", "symbol"],
+        ),
+    ),
+    Dict{String,Any}(
+        "name"        => "find_symbol_references",
+        "description" => "Find cells that reference a symbol (semantic analysis). Differs from search_code text search.",
+        "inputSchema" => Dict{String,Any}(
+            "type"       => "object",
+            "properties" => Dict{String,Any}(
+                "notebook_id" => Dict("type" => "string", "description" => "The notebook UUID."),
+                "symbol"      => Dict("type" => "string", "description" => "Symbol name to look up."),
+            ),
+            "required" => ["notebook_id", "symbol"],
+        ),
+    ),
+    Dict{String,Any}(
+        "name"        => "validate_cell",
+        "description" => "Validate proposed cell code (parse + single-expression rules) before edit_cell. Does not mutate the notebook.",
+        "inputSchema" => Dict{String,Any}(
+            "type"       => "object",
+            "properties" => Dict{String,Any}(
+                "notebook_id" => Dict("type" => "string", "description" => "The notebook UUID."),
+                "cell_id"     => Dict("type" => "string", "description" => "The cell UUID (used for parse context)."),
+                "code"        => Dict("type" => "string", "description" => "Proposed cell code to validate."),
+            ),
+            "required" => ["notebook_id", "cell_id", "code"],
+        ),
+    ),
+    Dict{String,Any}(
+        "name"        => "search_code",
+        "description" => "Text search across all cell codes. Returns snippets; unlike find_symbol_references, matches comments and shadowed names.",
+        "inputSchema" => Dict{String,Any}(
+            "type"       => "object",
+            "properties" => Dict{String,Any}(
+                "notebook_id" => Dict("type" => "string", "description" => "The notebook UUID."),
+                "query"       => Dict("type" => "string", "description" => "Substring to search for."),
+            ),
+            "required" => ["notebook_id", "query"],
+        ),
+    ),
 ]
 
 # ---------------------------------------------------------------------------

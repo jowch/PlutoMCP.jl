@@ -402,6 +402,18 @@ function call_tool(session, name, arguments)
         tool_get_cell_order(session, arguments)
     elseif name == "get_execution_order"
         tool_get_execution_order(session, arguments)
+    elseif name == "get_cell_dependencies"
+        tool_get_cell_dependencies(session, arguments)
+    elseif name == "get_cell_dependents"
+        tool_get_cell_dependents(session, arguments)
+    elseif name == "find_symbol_definitions"
+        tool_find_symbol_definitions(session, arguments)
+    elseif name == "find_symbol_references"
+        tool_find_symbol_references(session, arguments)
+    elseif name == "validate_cell"
+        tool_validate_cell(session, arguments)
+    elseif name == "search_code"
+        tool_search_code(session, arguments)
     else
         throw(ArgumentError("unknown_tool::Unknown tool: '$name'"))
     end

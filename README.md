@@ -126,6 +126,17 @@ In both cases Claude Desktop starts up instantly — no waiting for Julia at lau
 | `get_cell_order` | Visual cell order |
 | `get_execution_order` | Dependency / execution order |
 
+**Phase 2 — graph & validation (debugging, not default workflow):**
+
+| Tool | Description |
+|---|---|
+| `get_cell_dependencies` | Upstream cells and referenced symbols for a cell |
+| `get_cell_dependents` | Transitive downstream cells that would re-run on change |
+| `find_symbol_definitions` | Cells where a symbol is defined (semantic) |
+| `find_symbol_references` | Cells that reference a symbol (semantic) |
+| `validate_cell` | Parse + single-expression check on proposed code |
+| `search_code` | Plain-text search across cell codes |
+
 Write tools return a **mutation receipt** with `applied`, `mutation`, `cell_order`, `execution_order`, `affected_cells`, `execution.status`, `outputs.changed`, `pending_run`, and `warnings`.
 
 ### Tool details

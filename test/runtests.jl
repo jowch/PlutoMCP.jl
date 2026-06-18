@@ -539,6 +539,132 @@ end
         @test "get_execution_order" ∈ names
     end
 
+    @testset "graph tools on reactive chain" begin
+        session, nb, cells = make_session_with_notebook("x = 1", "y = x * 7")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+
+        cell_x, cell_y = cells[1], cells[2]
+
+        deps = PlutoMCP.tool_get_cell_dependencies(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cell_y.cell_id),
+        ))
+        @test string(cell_x.cell_id) ∈ deps["upstream"]
+        @test "x" ∈ deps["symbols"]
+
+        upstream_x = PlutoMCP.tool_get_cell_dependencies(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cell_x.cell_id),
+        ))
+        @test isempty(upstream_x["upstream"])
+
+        dependents = PlutoMCP.tool_get_cell_dependents(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cell_x.cell_id),
+        ))
+        @test dependents["downstream"] == [string(cell_y.cell_id)]
+
+        leaf_dependents = PlutoMCP.tool_get_cell_dependents(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cell_y.cell_id),
+        ))
+        @test isempty(leaf_dependents["downstream"])
+    end
+
+    @testset "find_symbol_definitions and references" begin
+        session, nb, cells = make_session_with_notebook("x = 1", "y = x * 7")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+
+        defs_x = PlutoMCP.tool_find_symbol_definitions(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "symbol"      => "x",
+        ))
+        @test length(defs_x) == 1
+        @test defs_x[1]["cell_id"] == string(cells[1].cell_id)
+        @test defs_x[1]["line_hint"] == 1
+
+        refs_x = PlutoMCP.tool_find_symbol_references(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "symbol"      => "x",
+        ))
+        ref_ids = [r["cell_id"] for r in refs_x]
+        @test string(cells[2].cell_id) ∈ ref_ids
+        @test string(cells[1].cell_id) ∉ ref_ids
+
+        defs_y = PlutoMCP.tool_find_symbol_definitions(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "symbol"      => "y",
+        ))
+        @test length(defs_y) == 1
+        @test defs_y[1]["cell_id"] == string(cells[2].cell_id)
+    end
+
+    @testset "validate_cell rejects multi-expression" begin
+        session, nb, cells = make_session_with_notebook("x = 1")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+
+        result = PlutoMCP.tool_validate_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "code"        => "a = 1\nb = 2",
+        ))
+        @test result["valid"] == false
+        @test any(e -> e["type"] == "multi_expression", result["errors"])
+
+        ok = PlutoMCP.tool_validate_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "code"        => "x = 42",
+        ))
+        @test ok["valid"] == true
+        @test isempty(ok["errors"])
+    end
+
+    @testset "search_code finds text symbol tools miss" begin
+        session, nb, cells = make_session_with_notebook(
+            "x = 1",
+            "# comment mentions x but does not reference it",
+            "y = x * 7",
+        )
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+
+        hits = PlutoMCP.tool_search_code(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "query"       => "mentions x",
+        ))
+        @test length(hits) == 1
+        @test hits[1]["cell_id"] == string(cells[2].cell_id)
+
+        refs_x = PlutoMCP.tool_find_symbol_references(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "symbol"      => "x",
+        ))
+        ref_ids = Set(r["cell_id"] for r in refs_x)
+        @test string(cells[2].cell_id) ∉ ref_ids
+    end
+
+    @testset "MCP protocol: tools/list graph tools" begin
+        session, _, _ = make_session_with_notebook("x = 1")
+
+        buf_in  = IOBuffer()
+        buf_out = IOBuffer()
+
+        write_msg(buf_in, Dict("jsonrpc" => "2.0", "id" => 6, "method" => "tools/list", "params" => Dict()))
+        seekstart(buf_in)
+
+        PlutoMCP.run_mcp_server(session, buf_in, buf_out)
+
+        resp  = read_resp(buf_out)
+        names = [t["name"] for t in resp["result"]["tools"]]
+
+        @test "get_cell_dependencies"    ∈ names
+        @test "get_cell_dependents"      ∈ names
+        @test "find_symbol_definitions"  ∈ names
+        @test "find_symbol_references"   ∈ names
+        @test "validate_cell"            ∈ names
+        @test "search_code"              ∈ names
+    end
+
     @testset "EvalLog records tool calls" begin
         log_path = tempname() * ".jsonl"
         try
