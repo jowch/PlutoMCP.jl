@@ -162,7 +162,7 @@ end
 """
     serve(; pluto_port=1234, mcp_port=2346, notebook=nothing, launch_browser=true,
            require_secret_for_access=true, eval_log=nothing, eval_run_id=nothing,
-           eval_redact_code=false)
+           eval_redact_code=missing)
 
 Start a Pluto server and expose it via an MCP HTTP/SSE interface.
 
@@ -213,7 +213,7 @@ function serve(;
     require_secret_for_access=true,
     eval_log=nothing,
     eval_run_id=nothing,
-    eval_redact_code=false,
+    eval_redact_code=missing,
 )
     configure_eval_log!(path=eval_log, run_id=eval_run_id, redact_code=eval_redact_code)
 
@@ -248,7 +248,11 @@ function serve(;
     @info "  MCP bridge     → http://localhost:$mcp_port/sse"
     @info "  stdio fallback → julia -e 'using PlutoMCP; PlutoMCP.connect(mcp_port=$mcp_port)'"
 
-    _run_http_mcp_server(pluto_session, mcp_port)
+    try
+        _run_http_mcp_server(pluto_session, mcp_port)
+    finally
+        reset_staging_state!()
+    end
 end
 
 # ---------------------------------------------------------------------------
