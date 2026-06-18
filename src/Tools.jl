@@ -48,8 +48,8 @@ function _serialize_output(cell)
     end
 end
 
-function _cell_to_dict(cell)
-    Dict{String,Any}(
+function _cell_to_dict(cell; notebook_id=nothing)
+    d = Dict{String,Any}(
         "cell_id" => string(cell.cell_id),
         "code"    => cell.code,
         "output"  => _serialize_output(cell),
@@ -57,6 +57,10 @@ function _cell_to_dict(cell)
         "running" => cell.running,
         "queued"  => cell.queued,
     )
+    if notebook_id !== nothing
+        d["stale"] = is_stale(notebook_id, cell.cell_id)
+    end
+    return d
 end
 
 function _wait_for_cell(cell; timeout=TOOL_TIMEOUT_SECONDS)
@@ -126,6 +130,24 @@ function _move_cell_in_order!(notebook, cell_id::UUID, after_cell_id)
     _set_cell_order!(notebook, order)
 end
 
+function _stage_cell!(session, nb, cell)
+    mark_pending!(nb.notebook_id, cell.cell_id)
+    nb.topology = Pluto.updated_topology(nb.topology, nb, [cell])
+    Pluto.save_notebook(session, nb)
+    _notify_browser(session, nb)
+end
+
+function _run_cells!(session, nb, cells; wait_for_completion=true)
+    Pluto.update_save_run!(session, nb, cells; run_async=!wait_for_completion, save=true)
+    if wait_for_completion
+        for cell in cells
+            _wait_for_cell(cell; timeout=TOOL_TIMEOUT_SECONDS)
+        end
+    end
+    clear_pending!(nb.notebook_id, [c.cell_id for c in cells])
+    _notify_browser(session, nb)
+end
+
 # ---------------------------------------------------------------------------
 # Tool implementations
 # ---------------------------------------------------------------------------
@@ -141,46 +163,79 @@ function tool_list_notebooks(session, _args)
     ]
 end
 
-function tool_get_notebook_state(session, args)
-    nb = _get_notebook(session, args["notebook_id"])
-    Dict{String,Any}(
-        "notebook_id" => string(nb.notebook_id),
-        "path"        => nb.path,
-        "cells"       => [_cell_to_dict(nb.cells_dict[id]) for id in nb.cell_order],
-    )
-end
-
-function tool_get_cell(session, args)
+function tool_read_cell(session, args)
     nb   = _get_notebook(session, args["notebook_id"])
     cell = _get_cell(nb, args["cell_id"])
-    _cell_to_dict(cell)
+    record_read!(nb.notebook_id, cell.cell_id, cell.code)
+    _cell_to_dict(cell; notebook_id=nb.notebook_id)
 end
 
-function tool_set_cell_code(session, args)
+function tool_edit_cell(session, args)
     nb        = _get_notebook(session, args["notebook_id"])
     cell      = _get_cell(nb, args["cell_id"])
     code      = args["code"]
-    run_after = get(args, "run_after", true)
+    run_after = get(args, "run_after", false)
+
+    require_fresh_read!(nb.notebook_id, cell)
 
     cell.code = code
+    record_read!(nb.notebook_id, cell.cell_id, code)
 
     if run_after
-        Pluto.update_save_run!(session, nb, [cell]; run_async=false, save=true)
-        _notify_browser(session, nb)
+        _run_cells!(session, nb, [cell]; wait_for_completion=true)
     else
-        nb.topology = Pluto.updated_topology(nb.topology, nb, [cell])
-        Pluto.save_notebook(session, nb)
-        _notify_browser(session, nb)
+        _stage_cell!(session, nb, cell)
     end
 
-    _cell_to_dict(cell)
+    receipt = _mutation_receipt(session, nb;
+        applied=true,
+        mutation=Dict{String,Any}("type" => "edit_cell", "cell_id" => string(cell.cell_id)),
+        cell_ids_run=run_after ? [cell.cell_id] : UUID[],
+    )
+    merge!(receipt, _cell_to_dict(cell; notebook_id=nb.notebook_id))
+    return receipt
+end
+
+function tool_edit_cells(session, args)
+    nb    = _get_notebook(session, args["notebook_id"])
+    edits = args["cells"]
+
+    edited_ids = UUID[]
+    for edit in edits
+        cell = _get_cell(nb, edit["cell_id"])
+        require_fresh_read!(nb.notebook_id, cell)
+        cell.code = edit["code"]
+        record_read!(nb.notebook_id, cell.cell_id, edit["code"])
+        _stage_cell!(session, nb, cell)
+        push!(edited_ids, cell.cell_id)
+    end
+
+    return _mutation_receipt(session, nb;
+        applied=true,
+        mutation=Dict{String,Any}(
+            "type"     => "edit_cells",
+            "cell_ids" => [string(id) for id in edited_ids],
+        ),
+        cell_ids_run=UUID[],
+    )
 end
 
 function tool_add_cell(session, args)
     nb            = _get_notebook(session, args["notebook_id"])
     code          = get(args, "code", "")
     after_cell_id = get(args, "after_cell_id", nothing)
-    run_after     = get(args, "run_after", true)
+    run_after     = get(args, "run_after", false)
+
+    if !isempty(nb.cell_order) && (after_cell_id === nothing || after_cell_id == "")
+        throw(ArgumentError(
+            "placement_required::after_cell_id is required when the notebook is not empty"
+        ))
+    end
+
+    if !isempty(nb.cell_order)
+        anchor = _get_cell(nb, after_cell_id)
+        require_fresh_read!(nb.notebook_id, anchor)
+    end
 
     new_cell = Pluto.Cell(; code=string(code))
     nb.cells_dict[new_cell.cell_id] = new_cell
@@ -197,15 +252,18 @@ function tool_add_cell(session, args)
     end
 
     if run_after
-        Pluto.update_save_run!(session, nb, [new_cell]; run_async=false, save=true)
-        _notify_browser(session, nb)
+        _run_cells!(session, nb, [new_cell]; wait_for_completion=true)
     else
-        nb.topology = Pluto.updated_topology(nb.topology, nb, [new_cell])
-        Pluto.save_notebook(session, nb)
-        _notify_browser(session, nb)
+        _stage_cell!(session, nb, new_cell)
     end
 
-    _cell_to_dict(new_cell)
+    receipt = _mutation_receipt(session, nb;
+        applied=true,
+        mutation=Dict{String,Any}("type" => "add_cell", "cell_id" => string(new_cell.cell_id)),
+        cell_ids_run=run_after ? [new_cell.cell_id] : UUID[],
+    )
+    merge!(receipt, _cell_to_dict(new_cell; notebook_id=nb.notebook_id))
+    return receipt
 end
 
 function tool_delete_cell(session, args)
@@ -216,28 +274,64 @@ function tool_delete_cell(session, args)
 
     _remove_cell_from_order!(nb, cell.cell_id)
     delete!(nb.cells_dict, cell.cell_id)
+    clear_pending!(nb.notebook_id, [cell.cell_id])
+    clear_read_receipt!(nb.notebook_id, cell.cell_id)
 
     # Passing no cells lets run_reactive detect the removed cell and clean up
     Pluto.update_save_run!(session, nb, Pluto.Cell[]; run_async=false, save=true)
     _notify_browser(session, nb)
 
-    Dict{String,Any}("deleted" => true, "cell_id" => cell_id_str)
+    return _mutation_receipt(session, nb;
+        applied=true,
+        mutation=Dict{String,Any}("type" => "delete_cell", "cell_id" => cell_id_str),
+        cell_ids_run=UUID[],
+    )
 end
 
-function tool_run_cell(session, args)
+function tool_execute_cell(session, args)
     nb       = _get_notebook(session, args["notebook_id"])
     cell     = _get_cell(nb, args["cell_id"])
     wait_for = get(args, "wait_for_completion", true)
 
-    Pluto.update_save_run!(session, nb, [cell]; run_async=!wait_for, save=true)
+    _run_cells!(session, nb, [cell]; wait_for_completion=wait_for)
 
-    if !wait_for
-        # Async: wait up to timeout so we can return current state
-        _wait_for_cell(cell; timeout=TOOL_TIMEOUT_SECONDS)
+    return _mutation_receipt(session, nb;
+        applied=true,
+        mutation=Dict{String,Any}("type" => "execute_cell", "cell_id" => string(cell.cell_id)),
+        cell_ids_run=[cell.cell_id],
+    )
+end
+
+function tool_submit_changes(session, args)
+    nb       = _get_notebook(session, args["notebook_id"])
+    wait_for = get(args, "wait_for_completion", true)
+
+    target_ids = if haskey(args, "cell_ids")
+        [try
+            UUID(cid)
+        catch
+            throw(ArgumentError("invalid_cell_id::Invalid cell ID: '$cid'"))
+        end for cid in args["cell_ids"]]
+    else
+        pending_run_ids(nb.notebook_id)
     end
 
-    _notify_browser(session, nb)
-    _cell_to_dict(cell)
+    if isempty(target_ids)
+        return _mutation_receipt(session, nb;
+            applied=true,
+            mutation=Dict{String,Any}("type" => "submit_changes"),
+            cell_ids_run=UUID[],
+        )
+    end
+
+    cells = [_get_cell(nb, string(cid)) for cid in target_ids]
+    _run_cells!(session, nb, cells; wait_for_completion=wait_for)
+
+    return _mutation_receipt(session, nb;
+        applied=true,
+        mutation=Dict{String,Any}("type" => "submit_changes"),
+        cell_ids_run=target_ids,
+    )
 end
 
 function tool_run_all_cells(session, args)
@@ -258,12 +352,23 @@ function tool_move_cell(session, args)
     cell          = _get_cell(nb, args["cell_id"])
     after_cell_id = args["after_cell_id"]
 
+    old_idx = findfirst(==(cell.cell_id), nb.cell_order)
     _move_cell_in_order!(nb, cell.cell_id, after_cell_id)
+    new_idx = findfirst(==(cell.cell_id), nb.cell_order)
 
     Pluto.save_notebook(session, nb)
     _notify_browser(session, nb)
 
-    _cell_to_dict(cell)
+    return _mutation_receipt(session, nb;
+        applied=true,
+        mutation=Dict{String,Any}(
+            "type"      => "move_cell",
+            "cell_id"   => string(cell.cell_id),
+            "old_index" => old_idx,
+            "new_index" => new_idx,
+        ),
+        cell_ids_run=UUID[],
+    )
 end
 
 # ---------------------------------------------------------------------------
@@ -273,22 +378,30 @@ end
 function call_tool(session, name, arguments)
     if name == "list_notebooks"
         tool_list_notebooks(session, arguments)
-    elseif name == "get_notebook_state"
-        tool_get_notebook_state(session, arguments)
-    elseif name == "get_cell"
-        tool_get_cell(session, arguments)
-    elseif name == "set_cell_code"
-        tool_set_cell_code(session, arguments)
+    elseif name == "read_cell"
+        tool_read_cell(session, arguments)
+    elseif name == "edit_cell"
+        tool_edit_cell(session, arguments)
+    elseif name == "edit_cells"
+        tool_edit_cells(session, arguments)
     elseif name == "add_cell"
         tool_add_cell(session, arguments)
     elseif name == "delete_cell"
         tool_delete_cell(session, arguments)
-    elseif name == "run_cell"
-        tool_run_cell(session, arguments)
+    elseif name == "execute_cell"
+        tool_execute_cell(session, arguments)
+    elseif name == "submit_changes"
+        tool_submit_changes(session, arguments)
     elseif name == "run_all_cells"
         tool_run_all_cells(session, arguments)
     elseif name == "move_cell"
         tool_move_cell(session, arguments)
+    elseif name == "read_notebook_code"
+        tool_read_notebook_code(session, arguments)
+    elseif name == "get_cell_order"
+        tool_get_cell_order(session, arguments)
+    elseif name == "get_execution_order"
+        tool_get_execution_order(session, arguments)
     else
         throw(ArgumentError("unknown_tool::Unknown tool: '$name'"))
     end

@@ -17,19 +17,8 @@ const MCP_TOOLS = [
         ),
     ),
     Dict{String,Any}(
-        "name"        => "get_notebook_state",
-        "description" => "Return a full snapshot of a notebook: all cell IDs, code, and current output/error state.",
-        "inputSchema" => Dict{String,Any}(
-            "type"       => "object",
-            "properties" => Dict{String,Any}(
-                "notebook_id" => Dict("type" => "string", "description" => "The notebook UUID."),
-            ),
-            "required" => ["notebook_id"],
-        ),
-    ),
-    Dict{String,Any}(
-        "name"        => "get_cell",
-        "description" => "Return the code and output of a single cell.",
+        "name"        => "read_cell",
+        "description" => "Return the code, output, and stale flag of a single cell.",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(
@@ -40,29 +29,52 @@ const MCP_TOOLS = [
         ),
     ),
     Dict{String,Any}(
-        "name"        => "set_cell_code",
-        "description" => "Replace the code in a cell. Runs the cell (and reactive dependents) unless run_after is false.",
+        "name"        => "edit_cell",
+        "description" => "Replace the code in a cell. Requires a prior read_cell or read_notebook_code on this cell. Stages the edit by default (run_after=false); call submit_changes to run staged cells.",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(
                 "notebook_id" => Dict("type" => "string", "description" => "The notebook UUID."),
                 "cell_id"     => Dict("type" => "string", "description" => "The cell UUID."),
                 "code"        => Dict("type" => "string", "description" => "New cell code."),
-                "run_after"   => Dict("type" => "boolean", "description" => "Run the cell after updating. Default: true."),
+                "run_after"   => Dict("type" => "boolean", "description" => "Run the cell after updating. Default: false."),
             ),
             "required" => ["notebook_id", "cell_id", "code"],
         ),
     ),
     Dict{String,Any}(
+        "name"        => "edit_cells",
+        "description" => "Batch stage cell code edits. Each cell must have been read first. Never runs cells; call submit_changes to execute staged edits.",
+        "inputSchema" => Dict{String,Any}(
+            "type"       => "object",
+            "properties" => Dict{String,Any}(
+                "notebook_id" => Dict("type" => "string", "description" => "The notebook UUID."),
+                "cells"       => Dict(
+                    "type"        => "array",
+                    "description" => "Array of {cell_id, code} objects to stage.",
+                    "items"       => Dict{String,Any}(
+                        "type"       => "object",
+                        "properties" => Dict{String,Any}(
+                            "cell_id" => Dict("type" => "string", "description" => "The cell UUID."),
+                            "code"    => Dict("type" => "string", "description" => "New cell code."),
+                        ),
+                        "required" => ["cell_id", "code"],
+                    ),
+                ),
+            ),
+            "required" => ["notebook_id", "cells"],
+        ),
+    ),
+    Dict{String,Any}(
         "name"        => "add_cell",
-        "description" => "Insert a new cell into the notebook, optionally after a specific cell.",
+        "description" => "Insert a new cell into the notebook. after_cell_id is required when the notebook is not empty; that anchor cell must have been read first.",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(
                 "notebook_id"   => Dict("type" => "string", "description" => "The notebook UUID."),
                 "code"          => Dict("type" => "string", "description" => "Initial cell code."),
-                "after_cell_id" => Dict("type" => "string", "description" => "Insert after this cell UUID; omit to append at end."),
-                "run_after"     => Dict("type" => "boolean", "description" => "Run the new cell after inserting. Default: true."),
+                "after_cell_id" => Dict("type" => "string", "description" => "Insert after this cell UUID; required when notebook is non-empty."),
+                "run_after"     => Dict("type" => "boolean", "description" => "Run the new cell after inserting. Default: false."),
             ),
             "required" => ["notebook_id", "code"],
         ),
@@ -80,8 +92,8 @@ const MCP_TOOLS = [
         ),
     ),
     Dict{String,Any}(
-        "name"        => "run_cell",
-        "description" => "Queue a specific cell for execution and optionally wait for it to finish.",
+        "name"        => "execute_cell",
+        "description" => "Run a specific cell (Shift+Enter). Optionally wait for completion.",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(
@@ -90,6 +102,23 @@ const MCP_TOOLS = [
                 "wait_for_completion" => Dict("type" => "boolean", "description" => "Block until the cell finishes. Default: true."),
             ),
             "required" => ["notebook_id", "cell_id"],
+        ),
+    ),
+    Dict{String,Any}(
+        "name"        => "submit_changes",
+        "description" => "Run all staged (dirty) cells, like Cmd+S in Pluto. Runs reactive dependents automatically.",
+        "inputSchema" => Dict{String,Any}(
+            "type"       => "object",
+            "properties" => Dict{String,Any}(
+                "notebook_id"         => Dict("type" => "string", "description" => "The notebook UUID."),
+                "cell_ids"            => Dict(
+                    "type"        => "array",
+                    "items"       => Dict("type" => "string"),
+                    "description" => "Optional subset of cell IDs to run; defaults to all pending staged cells.",
+                ),
+                "wait_for_completion" => Dict("type" => "boolean", "description" => "Block until cells finish. Default: true."),
+            ),
+            "required" => ["notebook_id"],
         ),
     ),
     Dict{String,Any}(
@@ -115,6 +144,48 @@ const MCP_TOOLS = [
                 "after_cell_id" => Dict("type" => "string", "description" => "Move after this cell UUID; pass \"\" to move to top."),
             ),
             "required" => ["notebook_id", "cell_id", "after_cell_id"],
+        ),
+    ),
+    Dict{String,Any}(
+        "name"        => "read_notebook_code",
+        "description" => "Return the notebook as a single code string with cell markers. Default order is execution (dependency) order; use order=visual for UI layout order.",
+        "inputSchema" => Dict{String,Any}(
+            "type"       => "object",
+            "properties" => Dict{String,Any}(
+                "notebook_id"      => Dict("type" => "string", "description" => "The notebook UUID."),
+                "order"            => Dict(
+                    "type"        => "string",
+                    "enum"        => ["execution", "visual"],
+                    "description" => "Cell ordering for projection. Default: execution.",
+                ),
+                "include_markdown" => Dict(
+                    "type"        => "boolean",
+                    "description" => "Include markdown cells as # md: prefixed blocks. Default: false.",
+                ),
+            ),
+            "required" => ["notebook_id"],
+        ),
+    ),
+    Dict{String,Any}(
+        "name"        => "get_cell_order",
+        "description" => "Return cell IDs in visual (UI) order.",
+        "inputSchema" => Dict{String,Any}(
+            "type"       => "object",
+            "properties" => Dict{String,Any}(
+                "notebook_id" => Dict("type" => "string", "description" => "The notebook UUID."),
+            ),
+            "required" => ["notebook_id"],
+        ),
+    ),
+    Dict{String,Any}(
+        "name"        => "get_execution_order",
+        "description" => "Return cell IDs in execution (dependency) order.",
+        "inputSchema" => Dict{String,Any}(
+            "type"       => "object",
+            "properties" => Dict{String,Any}(
+                "notebook_id" => Dict("type" => "string", "description" => "The notebook UUID."),
+            ),
+            "required" => ["notebook_id"],
         ),
     ),
 ]

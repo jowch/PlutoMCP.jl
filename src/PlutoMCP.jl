@@ -5,6 +5,8 @@ using UUIDs
 using HTTP
 using Pluto
 
+include("Staging.jl")
+include("Projection.jl")
 include("Tools.jl")
 include("MCP.jl")
 include("Server.jl")
