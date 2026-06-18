@@ -74,6 +74,7 @@ function _project_notebook_code(nb::Pluto.Notebook; order::AbstractString, inclu
     cell_ids = String[]
     for cell in _cells_in_order(nb, order)
         cell === nothing && continue
+        _should_exclude_from_projection(cell; include_markdown=include_markdown) && continue
         block = _format_cell_block(cell; include_markdown=include_markdown)
         block === nothing && continue
         push!(blocks, block)
