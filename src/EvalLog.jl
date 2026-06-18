@@ -15,7 +15,7 @@ const _EVAL_CONFIG = Ref(EvalLogConfig(nothing, "", false))
 function configure_eval_log!(;
     path::Union{String,Nothing,Missing}=missing,
     run_id::Union{String,Nothing,Missing}=missing,
-    redact_code::Bool=false,
+    redact_code::Union{Bool,Missing}=missing,
 )
     log_path = if path === missing
         get(ENV, "PLUTOMCP_EVAL_LOG", nothing)
@@ -29,7 +29,12 @@ function configure_eval_log!(;
     else
         run_id
     end
-    redact = redact_code || lowercase(get(ENV, "PLUTOMCP_EVAL_REDACT_CODE", "false")) == "true"
+    redact = if redact_code === missing
+        log_path !== nothing && !isempty(string(log_path))
+    else
+        redact_code
+    end
+    redact = redact || lowercase(get(ENV, "PLUTOMCP_EVAL_REDACT_CODE", "false")) == "true"
     lock(_EVAL_LOG_LOCK) do
         _EVAL_CONFIG[] = EvalLogConfig(log_path, rid, redact)
         _EVAL_SEQ[] = 0
@@ -48,6 +53,8 @@ function _truncate_code(s::AbstractString, max_len=500)
     return s[1:max_len] * "…"
 end
 
+const _SENSITIVE_ARG_KEYS = Set(["context", "dom_path", "visible_text", "query"])
+
 function _sanitize_args(args::Dict{String,Any}, redact_code::Bool)
     out = Dict{String,Any}()
     for (k, v) in args
@@ -61,17 +68,20 @@ function _sanitize_args(args::Dict{String,Any}, redact_code::Bool)
                 ) for c in v
             ]
         elseif k == "code" && v isa AbstractString
-            out[k] = _truncate_code(v)
+            out[k] = redact_code ? "[redacted]" : _truncate_code(v)
         elseif k == "cells" && v isa AbstractVector
             out[k] = [
                 begin
                     d = Dict{String,Any}()
                     for (ck, cv) in c
-                        d[ck] = ck == "code" && cv isa AbstractString ? _truncate_code(cv) : cv
+                        d[ck] = ck == "code" && cv isa AbstractString ?
+                            (redact_code ? "[redacted]" : _truncate_code(cv)) : cv
                     end
                     d
                 end for c in v
             ]
+        elseif k in _SENSITIVE_ARG_KEYS && v isa AbstractString
+            out[k] = redact_code ? "[redacted]" : _truncate_code(v, 200)
         else
             out[k] = v
         end
@@ -121,6 +131,7 @@ function log_tool_call(name::String, arguments::Dict{String,Any}, result::Dict{S
     end
     line = JSON3.write(entry) * "\n"
     open(cfg.path, "a") do io
+        chmod(cfg.path, 0o600)
         write(io, line)
     end
     return nothing

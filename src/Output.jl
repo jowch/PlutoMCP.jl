@@ -64,8 +64,6 @@ function _structure_error(body)
 
     d = Dict{String,Any}("kind" => "runtime", "msg" => msg)
     if body isa AbstractDict
-        trace = _dict_get(body, "stacktrace")
-        trace !== nothing && (d["stacktrace"] = trace)
         plain = _dict_get(body, "plain_error")
         plain !== nothing && plain != msg && (d["plain_error"] = plain)
     end
