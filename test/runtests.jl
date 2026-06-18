@@ -2,6 +2,7 @@ using PlutoMCP
 using Pluto
 using Test
 using UUIDs
+using JSON3
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -536,6 +537,44 @@ end
         @test "read_notebook_code"  ∈ names
         @test "get_cell_order"      ∈ names
         @test "get_execution_order" ∈ names
+    end
+
+    @testset "EvalLog records tool calls" begin
+        log_path = tempname() * ".jsonl"
+        try
+            PlutoMCP.configure_eval_log!(path=log_path, run_id="test-run", redact_code=false)
+            session, nb, cells = make_session_with_notebook("x = 1")
+            err_result = PlutoMCP._logged_handle_tool_call(session, "edit_cell", Dict{String,Any}(
+                "notebook_id" => string(nb.notebook_id),
+                "cell_id"     => string(cells[1].cell_id),
+                "code"        => "x = 2",
+            ))
+            @test err_result["isError"] == true
+            PlutoMCP._logged_handle_tool_call(session, "read_cell", Dict{String,Any}(
+                "notebook_id" => string(nb.notebook_id),
+                "cell_id"     => string(cells[1].cell_id),
+            ))
+            lines = filter(!isempty, split(read(log_path, String), '\n'))
+            @test length(lines) == 2
+            e1 = JSON3.read(lines[1], Dict{String,Any})
+            e2 = JSON3.read(lines[2], Dict{String,Any})
+            @test e1["tool"] == "edit_cell"
+            @test e1["is_error"] == true
+            @test e1["error_type"] == "read_required"
+            @test e2["tool"] == "read_cell"
+            @test e2["is_error"] == false
+        finally
+            PlutoMCP.configure_eval_log!(path=nothing)
+            rm(log_path; force=true)
+        end
+    end
+
+    @testset "eval reference runner" begin
+        proj = dirname(@__DIR__)
+        runner = joinpath(proj, "eval", "run_reference.jl")
+        @test isfile(runner)
+        cmd = `julia --project=$proj $runner --all`
+        @test success(run(pipeline(cmd, stdout=devnull, stderr=devnull)))
     end
 
 end

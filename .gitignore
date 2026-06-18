@@ -2,5 +2,7 @@
 /docs/Manifest*.toml
 /docs/build/
 /reference/
+eval/results/
+eval/golden/*.jsonl
 .claude
 .cursor/hooks/state/

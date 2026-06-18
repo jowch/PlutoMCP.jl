@@ -161,7 +161,8 @@ end
 
 """
     serve(; pluto_port=1234, mcp_port=2346, notebook=nothing, launch_browser=true,
-           require_secret_for_access=true)
+           require_secret_for_access=true, eval_log=nothing, eval_run_id=nothing,
+           eval_redact_code=false)
 
 Start a Pluto server and expose it via an MCP HTTP/SSE interface.
 
@@ -210,7 +211,12 @@ function serve(;
     notebook=nothing,
     launch_browser=true,
     require_secret_for_access=true,
+    eval_log=nothing,
+    eval_run_id=nothing,
+    eval_redact_code=false,
 )
+    configure_eval_log!(path=eval_log, run_id=eval_run_id, redact_code=eval_redact_code)
+
     @eval using Pluto
     # `Pluto` binding was added in the new world age; define a helper there and
     # call it via @eval so both the binding lookup and call happen in the latest

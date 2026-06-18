@@ -46,6 +46,7 @@ PlutoMCP.serve()                              # Pluto on :1234, MCP bridge on :2
 PlutoMCP.serve(pluto_port=4321)              # custom Pluto port
 PlutoMCP.serve(notebook="my_nb.jl")         # open a notebook on start
 PlutoMCP.serve(pluto_port=1234, mcp_port=3000)  # custom MCP port
+PlutoMCP.serve(notebook="my_nb.jl", eval_log="/tmp/trace.jsonl")  # agent eval logging
 ```
 
 `serve()` starts Pluto in the background and blocks, running the MCP HTTP/SSE server. Open the printed Pluto URL in your browser as usual. **Any notebooks you open in the browser are immediately visible to Claude.**
@@ -290,6 +291,18 @@ MCP tool results are plain text, so rich cell outputs are serialized as follows:
 | Binary (images, etc.) | `[image/png output, 48KB]` |
 | Error | the error message string; `"errored": true` |
 | No output | empty string |
+
+---
+
+## Agent eval harness
+
+See [`eval/README.md`](eval/README.md) for the full harness.
+
+- **Reference runner (CI):** `julia --project=. eval/run_reference.jl --all` — golden-path tool sequences via HTTP `/call`, no API key
+- **Scoring:** `eval/score.jl` — outcome (strict) + trace (advisory) from server-side `eval_log` jsonl
+- **SDK runs:** [pluto-cursor-bridge/eval](../pluto-cursor-bridge/eval/) — Cursor SDK orchestrator (`CURSOR_API_KEY`)
+
+Eval kwargs on `serve()`: `eval_log`, `eval_run_id`, `eval_redact_code`. Or env vars `PLUTOMCP_EVAL_LOG`, `PLUTOMCP_EVAL_RUN_ID`.
 
 ---
 

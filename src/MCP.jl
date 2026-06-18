@@ -238,10 +238,14 @@ function _safe_handle_tool_call(session, name, arguments)
         _handle_tool_call(session, name, arguments)
     catch e
         raw = sprint(showerror, e)
-        # Error format: "error_type::human message"
+        # Error format: "error_type::human message" (ArgumentError may prefix the type name)
         error_type, error_msg = if contains(raw, "::")
             parts = split(raw, "::", limit=2)
-            string(parts[1]), string(parts[2])
+            et = string(strip(parts[1]))
+            if occursin(':', et)
+                et = strip(last(split(et, ':')))
+            end
+            et, string(parts[2])
         else
             "tool_error", raw
         end
@@ -252,6 +256,14 @@ function _safe_handle_tool_call(session, name, arguments)
             "isError" => true,
         )
     end
+end
+
+function _logged_handle_tool_call(session, name, arguments)
+    t0 = time_ns()
+    result = _safe_handle_tool_call(session, name, arguments)
+    duration_ms = max(0, round(Int, (time_ns() - t0) / 1_000_000))
+    log_tool_call(name, arguments, result, duration_ms)
+    return result
 end
 
 # ---------------------------------------------------------------------------
@@ -279,7 +291,7 @@ function _dispatch_mcp(session, msg::Dict{String,Any})
         params    = get(msg, "params", Dict{String,Any}())
         name      = get(params, "name", "")
         arguments = get(params, "arguments", Dict{String,Any}())
-        result    = _safe_handle_tool_call(session, name, arguments)
+        result    = _logged_handle_tool_call(session, name, arguments)
         _ok(id, result)
 
     elseif method == "ping"
