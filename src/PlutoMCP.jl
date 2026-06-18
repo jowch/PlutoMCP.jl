@@ -6,6 +6,7 @@ using HTTP
 using Pluto
 
 include("Output.jl")
+include("Context.jl")
 include("Staging.jl")
 include("Projection.jl")
 include("Tools.jl")

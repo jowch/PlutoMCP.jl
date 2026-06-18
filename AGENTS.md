@@ -8,6 +8,7 @@
 - `read_notebook_code` defaults to execution/dependency order, not visual cell order.
 - Include empty code cells in `read_notebook_code` projection.
 - `read_notebook_code` returns `code` plus `cell_ids` and `stale_cell_ids`/`pending_run`; not a duplicate `cells[]` array.
+- `resolve_pluto_context` maps Design Mode `dom_path`, Glass URL, or `browser_element` block → `notebook_id` + `cell_id`.
 - Remove `get_notebook_state` from the agent-facing MCP surface.
 - Omit markdown, manifest blobs, and `@bind` scaffolding from default `read_notebook_code` projection.
 - Ground Pluto projection rules on real notebook artifacts in a gitignored `reference/` directory.
@@ -28,3 +29,4 @@
 - `serve()` / standalone `connect()` forward `require_secret_for_access` to Pluto `Options` (default `true`); plugin uses `false` on loopback.
 - Cursor plugin spawns bridge via `mcp.json` launcher → `connect()` proxy (D12).
 - Layer 2 graph/validation MCP tools ship here after Phase 1 validates.
+- Deterministic eval gate: `eval/run_reference.jl --all` (no API key); SDK agent eval lives in bridge `eval/run.ts`.

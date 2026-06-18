@@ -684,12 +684,50 @@ end
         resp  = read_resp(buf_out)
         names = [t["name"] for t in resp["result"]["tools"]]
 
+        @test "resolve_pluto_context"    ∈ names
         @test "get_cell_dependencies"    ∈ names
         @test "get_cell_dependents"      ∈ names
         @test "find_symbol_definitions"  ∈ names
         @test "find_symbol_references"   ∈ names
         @test "validate_cell"            ∈ names
         @test "search_code"              ∈ names
+    end
+
+    @testset "resolve_pluto_context" begin
+        dom = "div > pluto-notebook#456d9a62-6ae3-11f1-83e9-0de6400360b8 > pluto-cell#ac0fafc6-6ade-11f1-afe2-0f49ca84a4fb > pluto-output > img"
+        r = PlutoMCP.resolve_pluto_context_string(dom)
+        @test r["ok"] == true
+        @test r["notebook_id"] == "456d9a62-6ae3-11f1-83e9-0de6400360b8"
+        @test r["cell_id"] == "ac0fafc6-6ade-11f1-afe2-0f49ca84a4fb"
+        @test r["in_output"] == true
+        @test r["in_input"] == false
+
+        block = """
+        ```browser_element
+        dom_path: $dom
+        visible_text: b = 2
+        ```
+        """
+        r2 = PlutoMCP.resolve_pluto_context_string(block)
+        @test r2["ok"] == true
+        @test r2["cell_id"] == r["cell_id"]
+
+        url = "http://127.0.0.1:1234/45546158-6ae5-11f1-a279-f9f46f728fee"
+        r3 = PlutoMCP.resolve_pluto_context_string(url)
+        @test r3["ok"] == true
+        @test r3["notebook_id"] == "45546158-6ae5-11f1-a279-f9f46f728fee"
+        @test r3["cell_id"] === nothing
+
+        @test PlutoMCP.resolve_pluto_context_string("main > header")["ok"] == false
+        @test PlutoMCP.resolve_pluto_context_string("")["reason"] == "invalid_context"
+
+        session, nb, cells = make_session_with_notebook("x = 1")
+        tool = PlutoMCP.tool_resolve_pluto_context(session, Dict(
+            "context" => "pluto-notebook#$(nb.notebook_id) > pluto-cell#$(cells[1].cell_id) > pluto-input",
+        ))
+        @test tool["ok"] == true
+        @test tool["notebook_open"] == true
+        @test tool["in_input"] == true
     end
 
     @testset "EvalLog records tool calls" begin

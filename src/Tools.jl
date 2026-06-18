@@ -376,6 +376,8 @@ function call_tool(session, name, arguments)
         tool_run_all_cells(session, arguments)
     elseif name == "move_cell"
         tool_move_cell(session, arguments)
+    elseif name == "resolve_pluto_context"
+        tool_resolve_pluto_context(session, arguments)
     elseif name == "read_notebook_code"
         tool_read_notebook_code(session, arguments)
     elseif name == "get_cell_order"

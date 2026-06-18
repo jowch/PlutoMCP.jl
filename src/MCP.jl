@@ -147,6 +147,28 @@ const MCP_TOOLS = [
         ),
     ),
     Dict{String,Any}(
+        "name"        => "resolve_pluto_context",
+        "description" => "Extract notebook_id and cell_id from a Design Mode dom_path, Glass URL, or browser_element block. Call before read_cell when ids are embedded in prompt text rather than passed explicitly.",
+        "inputSchema" => Dict{String,Any}(
+            "type"       => "object",
+            "properties" => Dict{String,Any}(
+                "context" => Dict(
+                    "type"        => "string",
+                    "description" => "dom_path string, Glass URL, or full browser_element block from Design Mode.",
+                ),
+                "dom_path" => Dict(
+                    "type"        => "string",
+                    "description" => "Alias for context when only dom_path is available.",
+                ),
+                "validate_notebook" => Dict(
+                    "type"        => "boolean",
+                    "description" => "When true (default), set notebook_open if the resolved notebook is in the live session.",
+                ),
+            ),
+            "required" => String[],
+        ),
+    ),
+    Dict{String,Any}(
         "name"        => "read_notebook_code",
         "description" => "Return the notebook as a single code string with cell markers. Default order is execution (dependency) order; use order=visual for UI layout order.",
         "inputSchema" => Dict{String,Any}(
