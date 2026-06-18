@@ -3,3 +3,4 @@
 /docs/build/
 /reference/
 .claude
+.cursor/hooks/state/

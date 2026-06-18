@@ -112,14 +112,20 @@ In both cases Claude Desktop starts up instantly — no waiting for Julia at lau
 | Tool | Description |
 |---|---|
 | `list_notebooks` | List all notebooks open in the session |
-| `get_notebook_state` | Full snapshot of a notebook — all cells, code, and output |
-| `get_cell` | Code and output of a single cell |
-| `set_cell_code` | Replace a cell's code; optionally run it (default: yes) |
-| `add_cell` | Insert a new cell, optionally after a specific cell |
-| `delete_cell` | Delete a cell (irreversible within the session) |
-| `run_cell` | Queue a cell for execution, optionally waiting for the result |
+| `read_notebook_code` | Whole notebook as execution-order code projection |
+| `read_cell` | Code, output, and stale flag of a single cell |
+| `edit_cell` | Replace a cell's code; stages by default (`run_after=false`) |
+| `edit_cells` | Batch stage `{cell_id, code}[]`; never runs |
+| `add_cell` | Insert a new cell (`after_cell_id` required when notebook is non-empty) |
+| `delete_cell` | Delete a cell (immediate reactive cleanup) |
+| `submit_changes` | Run all staged cells (Cmd+S semantics) |
+| `execute_cell` | Run one cell (Shift+Enter) |
 | `run_all_cells` | Re-run all cells in dependency order |
 | `move_cell` | Reorder a cell relative to another |
+| `get_cell_order` | Visual cell order |
+| `get_execution_order` | Dependency / execution order |
+
+Write tools return a **mutation receipt** with `applied`, `mutation`, `cell_order`, `execution_order`, `affected_cells`, `execution.status`, `outputs.changed`, `pending_run`, and `warnings`.
 
 ### Tool details
 
@@ -137,15 +143,16 @@ No inputs. Returns an array of notebook objects:
 ]
 ```
 
-#### `get_notebook_state`
+#### `read_notebook_code`
 
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `notebook_id` | string | yes | Notebook UUID |
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `notebook_id` | string | yes | — | Notebook UUID |
+| `order` | string | no | `execution` | `execution` or `visual` |
 
-Returns the full notebook state including all cells.
+Returns a linear `code` string with embedded cell markers, plus `cell_ids`, `stale_cell_ids`, and `pending_run`.
 
-#### `get_cell`
+#### `read_cell`
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -161,18 +168,30 @@ Returns a single cell object:
   "output": "2",
   "errored": false,
   "running": false,
-  "queued": false
+  "queued": false,
+  "stale": false
 }
 ```
 
-#### `set_cell_code`
+#### `edit_cell`
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `notebook_id` | string | yes | — | Notebook UUID |
 | `cell_id` | string | yes | — | Cell UUID |
 | `code` | string | yes | — | New cell code |
-| `run_after` | boolean | no | `true` | Run the cell (and reactive dependents) after updating |
+| `run_after` | boolean | no | `false` | Run the cell after updating |
+
+Returns a mutation receipt (plus cell fields when staging).
+
+#### `edit_cells`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|---|
+| `notebook_id` | string | yes | Notebook UUID |
+| `cells` | array | yes | `[{cell_id, code}, ...]` to stage |
+
+Never runs cells. Call `submit_changes` to execute staged edits.
 
 #### `add_cell`
 
@@ -180,8 +199,8 @@ Returns a single cell object:
 |---|---|---|---|---|
 | `notebook_id` | string | yes | — | Notebook UUID |
 | `code` | string | yes | — | Initial cell code |
-| `after_cell_id` | string | no | — | Insert after this cell; omit to append at end |
-| `run_after` | boolean | no | `true` | Run the new cell after inserting |
+| `after_cell_id` | string | no* | — | Insert after this cell; required when notebook is non-empty |
+| `run_after` | boolean | no | `false` | Run the new cell after inserting |
 
 #### `delete_cell`
 
@@ -190,9 +209,19 @@ Returns a single cell object:
 | `notebook_id` | string | yes | Notebook UUID |
 | `cell_id` | string | yes | Cell UUID to delete |
 
-This is irreversible within the session.
+Returns a mutation receipt. Irreversible within the session.
 
-#### `run_cell`
+#### `submit_changes`
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `notebook_id` | string | yes | — | Notebook UUID |
+| `cell_ids` | array | no | all pending | Subset of staged cell IDs to run |
+| `wait_for_completion` | boolean | no | `true` | Block until cells finish |
+
+Runs staged cells and reactive dependents (Pluto Cmd+S semantics).
+
+#### `execute_cell`
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -214,6 +243,8 @@ This is irreversible within the session.
 | `notebook_id` | string | yes | Notebook UUID |
 | `cell_id` | string | yes | Cell UUID to move |
 | `after_cell_id` | string | yes | Move after this cell UUID; pass `""` to move to the top |
+
+Returns a mutation receipt with `old_index` / `new_index` in `mutation`.
 
 ### Error responses
 
