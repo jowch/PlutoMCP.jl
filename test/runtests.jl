@@ -31,6 +31,8 @@ end
 
 @testset "PlutoMCP.jl" begin
 
+    PlutoMCP.reset_staging_state!()
+
     @testset "list_notebooks" begin
         session, nb, _ = make_session_with_notebook("x = 1")
         result = PlutoMCP.tool_list_notebooks(session, Dict())
@@ -153,6 +155,33 @@ end
 
         cell_y = cells[2]
         @test PlutoMCP._serialize_output(cell_y) == "10"
+    end
+
+    @testset "submit_changes noop when nothing pending" begin
+        session, nb, _ = make_session_with_notebook("x = 1")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+        receipt = PlutoMCP.tool_submit_changes(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+        ))
+        @test receipt["execution"]["status"] == "completed"
+        @test isempty(receipt["pending_run"])
+    end
+
+    @testset "submit_changes not_staged and force" begin
+        session, nb, cells = make_session_with_notebook("x = 1", "y = x")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+        read_cells!(session, nb, cells[1])
+        @test_throws Exception PlutoMCP.tool_submit_changes(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_ids"    => [string(cells[2].cell_id)],
+        ))
+        receipt = PlutoMCP.tool_submit_changes(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_ids"    => [string(cells[2].cell_id)],
+            "force"       => true,
+        ))
+        @test receipt["applied"] == true
+        @test string(cells[2].cell_id) ∈ receipt["affected_cells"]
     end
 
     @testset "read-before-edit guard" begin
@@ -393,7 +422,6 @@ end
         fixture = joinpath(@__DIR__, "fixtures", "test_notebook.jl")
         @test isfile(fixture)
 
-        # Work on a temp copy so the fixture is never mutated by Pluto's auto-save
         tmp = tempname() * ".jl"
         cp(fixture, tmp)
 
@@ -401,35 +429,41 @@ end
             options = Pluto.Configuration.from_flat_kwargs(launch_browser = false),
         )
         pluto_task = @async Pluto.run!(session)
-        sleep(3.0)
+        try
+            deadline = time() + 30.0
+            while time() < deadline && isempty(session.notebooks)
+                sleep(0.1)
+            end
 
-        nb = Pluto.SessionActions.open(session, tmp; run_async=false)
+            nb = Pluto.SessionActions.open(session, tmp; run_async=false)
 
-        cell_x_id = "11111111-1111-1111-1111-111111111111"
-        cell_y_id = "22222222-2222-2222-2222-222222222222"
+            cell_x_id = "11111111-1111-1111-1111-111111111111"
+            cell_y_id = "22222222-2222-2222-2222-222222222222"
 
-        # After open, cells should have run: x=6, y=6*7=42
-        result_y = PlutoMCP.tool_read_cell(session,
-            Dict("notebook_id" => string(nb.notebook_id), "cell_id" => cell_y_id))
-        @test result_y["output"] == "42"
+            result_y = PlutoMCP.tool_read_cell(session,
+                Dict("notebook_id" => string(nb.notebook_id), "cell_id" => cell_y_id))
+            @test result_y["output"] == "42"
 
-        # Change x; Pluto reactivity re-evaluates y = 10 * 7 = 70
-        PlutoMCP.tool_read_cell(session,
-            Dict("notebook_id" => string(nb.notebook_id), "cell_id" => cell_x_id))
-        PlutoMCP.tool_edit_cell(session, Dict(
-            "notebook_id" => string(nb.notebook_id),
-            "cell_id"     => cell_x_id,
-            "code"        => "x = 10",
-            "run_after"   => true,
-        ))
+            PlutoMCP.tool_read_cell(session,
+                Dict("notebook_id" => string(nb.notebook_id), "cell_id" => cell_x_id))
+            PlutoMCP.tool_edit_cell(session, Dict(
+                "notebook_id" => string(nb.notebook_id),
+                "cell_id"     => cell_x_id,
+                "code"        => "x = 10",
+                "run_after"   => true,
+            ))
 
-        result_y2 = PlutoMCP.tool_read_cell(session,
-            Dict("notebook_id" => string(nb.notebook_id), "cell_id" => cell_y_id))
-        @test result_y2["output"] == "70"
+            result_y2 = PlutoMCP.tool_read_cell(session,
+                Dict("notebook_id" => string(nb.notebook_id), "cell_id" => cell_y_id))
+            @test result_y2["output"] == "70"
 
-        # Teardown — shut down notebook; let the async Pluto task finish on its own
-        Pluto.SessionActions.shutdown(session, nb; async=false, verbose=false)
-        try; schedule(pluto_task, InterruptException(); error=true); catch; end
+            Pluto.SessionActions.shutdown(session, nb; async=false, verbose=false)
+            sleep(1.0)
+        finally
+            rm(tmp; force=true)
+            try; schedule(pluto_task, InterruptException(); error=true); catch; end
+            sleep(0.5)
+        end
     end
 
     @testset "edit_cells stages multiple cells without executing" begin
@@ -451,7 +485,7 @@ end
         @test receipt["mutation"]["type"] == "edit_cells"
         @test length(receipt["pending_run"]) == 2
         @test PlutoMCP._serialize_output(cell_c) == "3"
-        @test receipt["execution"]["status"] == "completed"
+        @test receipt["execution"]["status"] == "staged"
     end
 
     @testset "delete_cell returns mutation receipt" begin
@@ -636,7 +670,7 @@ end
             "code"        => "a = 1\nb = 2",
         ))
         @test result["valid"] == false
-        @test any(e -> e["type"] == "multi_expression", result["errors"])
+        @test any(e -> e["type"] == "pluto_multi_expression", result["errors"])
 
         ok = PlutoMCP.tool_validate_cell(session, Dict(
             "notebook_id" => string(nb.notebook_id),
@@ -718,6 +752,16 @@ end
         @test r3["notebook_id"] == "45546158-6ae5-11f1-a279-f9f46f728fee"
         @test r3["cell_id"] === nothing
 
+        custom_port = "http://127.0.0.1:8765/45546158-6ae5-11f1-a279-f9f46f728fee"
+        r4 = PlutoMCP.resolve_pluto_context_string(custom_port)
+        @test r4["ok"] == true
+        @test r4["notebook_id"] == "45546158-6ae5-11f1-a279-f9f46f728fee"
+
+        cell_only = "pluto-cell#ac0fafc6-6ade-11f1-afe2-0f49ca84a4fb"
+        r5 = PlutoMCP.resolve_pluto_context_string(cell_only)
+        @test r5["ok"] == false
+        @test r5["reason"] == "notebook_id_missing"
+
         @test PlutoMCP.resolve_pluto_context_string("main > header")["ok"] == false
         @test PlutoMCP.resolve_pluto_context_string("")["reason"] == "invalid_context"
 
@@ -728,6 +772,81 @@ end
         @test tool["ok"] == true
         @test tool["notebook_open"] == true
         @test tool["in_input"] == true
+    end
+
+    @testset "read_notebook_code excludes manifest cells" begin
+        fixture = joinpath(@__DIR__, "fixtures", "test_notebook.jl")
+        session = Pluto.ServerSession()
+        nb      = Pluto.load_notebook_nobackup(fixture)
+        session.notebooks[nb.notebook_id] = nb
+        Pluto.update_dependency_cache!(nb)
+
+        result = PlutoMCP.tool_read_notebook_code(session,
+            Dict("notebook_id" => string(nb.notebook_id)))
+
+        @test !occursin("PLUTO_PROJECT_TOML_CONTENTS", result["code"])
+        @test !occursin("PLUTO_MANIFEST_TOML_CONTENTS", result["code"])
+        @test !("00000000-0000-0000-0000-000000000001" in result["cell_ids"])
+    end
+
+    @testset "add_cell records read receipt for immediate edit" begin
+        session, nb, cells = make_session_with_notebook("x = 1")
+        read_cells!(session, nb, cells[1])
+        added = PlutoMCP.tool_add_cell(session, Dict(
+            "notebook_id"   => string(nb.notebook_id),
+            "code"          => "y = 2",
+            "after_cell_id" => string(cells[1].cell_id),
+        ))
+        receipt = PlutoMCP.tool_edit_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => added["cell_id"],
+            "code"        => "y = 3",
+        ))
+        @test receipt["applied"] == true
+    end
+
+    @testset "run_all_cells clears pending_run" begin
+        session, nb, cells = make_session_with_notebook("x = 1", "y = x + 1")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+        read_cells!(session, nb, cells[1])
+        PlutoMCP.tool_edit_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "code"        => "x = 10",
+        ))
+        @test !isempty(PlutoMCP.pending_run_ids(nb.notebook_id))
+
+        receipt = PlutoMCP.tool_run_all_cells(session, Dict(
+            "notebook_id"       => string(nb.notebook_id),
+            "wait_for_completion" => true,
+        ))
+        @test receipt["mutation"]["type"] == "run_all_cells"
+        @test isempty(receipt["pending_run"])
+    end
+
+    @testset "run_all_cells async reports running when cells dispatched" begin
+        session, nb, _ = make_session_with_notebook("x = 1", "y = x + 1")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+        receipt = PlutoMCP.tool_run_all_cells(session, Dict(
+            "notebook_id"         => string(nb.notebook_id),
+            "wait_for_completion" => false,
+        ))
+        @test length(receipt["affected_cells"]) == 2
+        @test receipt["execution"]["status"] == "running"
+    end
+
+    @testset "edit_cells is atomic on read guard failure" begin
+        session, nb, cells = make_session_with_notebook("a = 1", "b = 2")
+        read_cells!(session, nb, cells[1])
+        @test_throws Exception PlutoMCP.tool_edit_cells(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cells"       => [
+                Dict("cell_id" => string(cells[1].cell_id), "code" => "a = 10"),
+                Dict("cell_id" => string(cells[2].cell_id), "code" => "b = 20"),
+            ],
+        ))
+        @test cells[1].code == "a = 1"
+        @test isempty(PlutoMCP.pending_run_ids(nb.notebook_id))
     end
 
     @testset "EvalLog records tool calls" begin
@@ -760,12 +879,45 @@ end
         end
     end
 
+    @testset "EvalShared score_trace" begin
+        include(joinpath(dirname(@__DIR__), "eval", "lib", "EvalShared.jl"))
+        entries = [
+            Dict{String,Any}("tool" => "edit_cell", "args" => Dict("run_after" => true)),
+        ]
+        bad = score_trace(entries, Dict("max_run_after" => 0))
+        @test bad["pass"] == false
+        @test any(occursin("run_after", d) for d in bad["diagnostics"])
+
+        ok = score_trace(
+            [Dict{String,Any}("tool" => "read_cell", "args" => Dict("cell_id" => "a"))],
+            Dict("read_before_first_edit" => true, "must_include_subsequence" => ["read_cell"]),
+        )
+        @test ok["pass"] == true
+
+        err = score_trace(
+            [Dict{String,Any}("tool" => "edit_cell", "args" => Dict("cell_id" => "a"), "is_error" => true, "error_type" => "syntax")],
+            Dict("expect_read_required_error" => true),
+        )
+        @test err["pass"] == false
+    end
+
     @testset "eval reference runner" begin
+        runner = joinpath(dirname(@__DIR__), "eval", "run_reference.jl")
         proj = dirname(@__DIR__)
-        runner = joinpath(proj, "eval", "run_reference.jl")
         @test isfile(runner)
-        cmd = `julia --project=$proj $runner --all`
-        @test success(run(pipeline(cmd, stdout=devnull, stderr=devnull)))
+        # Fresh Julia subprocess avoids precompile races with Pluto already loaded here.
+        sleep(2)
+        julia = joinpath(Sys.BINDIR, Base.julia_exename())
+        stderr_io = IOBuffer()
+        cmd = setenv(
+            `$julia --project=$proj --startup-file=no $runner --all --strict-trace`,
+            "JULIA_PRECOMPILE" => "0",
+        )
+        proc = run(pipeline(ignorestatus(cmd), stderr=stderr_io), wait=true)
+        if proc.exitcode != 0
+            @warn "eval reference runner failed" exitcode=proc.exitcode stderr=String(take!(stderr_io))
+        end
+        @test proc.exitcode == 0
     end
 
 end
