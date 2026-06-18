@@ -12,12 +12,12 @@ function main()
         "mcp-url" => "http://127.0.0.1:2346",
     ))
     haskey(opts, "scenario") || error("Usage: score.jl --scenario <path|id> [--log trace.jsonl] [--mcp-url URL] [--meta meta.json] [--strict-trace]")
-    scenario_path = scenario_path(opts["scenario"])
+    resolved = scenario_path(opts["scenario"])
     log_path = get(opts, "log", nothing)
     meta_path = get(opts, "meta", nothing)
     strict = haskey(opts, "strict-trace")
     report, exit_code = run_score(
-        scenario_path = scenario_path,
+        scenario_path = resolved,
         log_path      = log_path,
         mcp_url       = mcp_url_from_opts(opts),
         meta_path     = meta_path,
