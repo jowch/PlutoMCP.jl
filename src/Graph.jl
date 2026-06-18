@@ -81,7 +81,7 @@ function _parse_validation_errors(nb::Pluto.Notebook, cell::Pluto.Cell, code::St
 
     if !Pluto.is_single_expression(code)
         push!(errors, _validation_error(
-            "multi_expression",
+            "pluto_multi_expression",
             "Cell must contain a single expression",
         ))
     end
@@ -156,9 +156,10 @@ function tool_search_code(session, args)
     query = args["query"]
 
     results = Dict{String,Any}[]
-    for cid in nb.cell_order
-        cell = get(nb.cells_dict, cid, nothing)
-        cell === nothing && continue
+    seen = Set{UUID}()
+    for cell in values(nb.cells_dict)
+        cell.cell_id in seen && continue
+        push!(seen, cell.cell_id)
         snippet = _snippet_around_match(cell.code, query)
         snippet === nothing && continue
         push!(results, Dict{String,Any}(
