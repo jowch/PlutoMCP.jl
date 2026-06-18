@@ -13,7 +13,7 @@
 - Ground Pluto projection rules on real notebook artifacts in a gitignored `reference/` directory.
 - `@bind` must be last expression in cell (widget in output); show bound value in a separate cell.
 - Pluto cells are single expressions; multi-statement bodies need `begin`/`let` or separate cells (agent guide: pluto-cursor-bridge `docs/pluto-agent-primer.md`).
-- `read_cell` on errored cells returns structured `error` (`pluto_multi_expression`, `boundaries`, `hint`) mirroring Pluto browser UI.
+- When fixing `pluto_multi_expression`, agents should default to `begin`/`end` wrap (see pluto-cursor-bridge primer); `error.fixes` lists `wrap_begin_end` first.
 - **Commit hygiene:** commit at logical boundaries as you go — modules → wiring → tests → docs when possible; split unrelated work (e.g. eval harness vs Phase 2 graph tools). Ask before pushing.
 
 ## Learned Workspace Facts

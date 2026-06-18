@@ -48,14 +48,14 @@ function _structure_error(body)
         hint = if isempty(boundaries)
             "Multiple expressions in one cell. Wrap all code in a begin ... end block."
         else
-            "Multiple expressions in one cell. Split this cell into $n cells, or wrap all code in a begin ... end block."
+            "Multiple expressions in one cell. Wrap all code in a begin ... end block (preferred), or split into $n cells."
         end
         core = strip(split(msg, "\n\nBoundaries:")[1])
         d = Dict{String,Any}(
             "kind"        => "pluto_multi_expression",
             "msg"         => core,
             "hint"        => hint,
-            "fixes"       => ["split_cells", "wrap_begin_end"],
+            "fixes"       => ["wrap_begin_end", "split_cells"],
         )
         isempty(boundaries) || (d["boundaries"] = boundaries)
         isempty(boundaries) || (d["split_count"] = n)

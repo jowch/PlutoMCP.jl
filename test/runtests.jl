@@ -262,8 +262,8 @@ end
         @test err["kind"] == "pluto_multi_expression"
         @test err["boundaries"] == [13, 30]
         @test err["split_count"] == 2
-        @test err["fixes"] == ["split_cells", "wrap_begin_end"]
-        @test occursin("Split this cell into 2 cells", err["hint"])
+        @test err["fixes"] == ["wrap_begin_end", "split_cells"]
+        @test occursin("begin ... end block (preferred)", err["hint"])
     end
 
     @testset "read_cell structured error" begin
