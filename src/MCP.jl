@@ -326,6 +326,18 @@ const MCP_TOOLS = [
             "required" => ["path"],
         ),
     ),
+    Dict{String,Any}(
+        "name"        => "allow_execution",
+        "description" => "Exit safe preview on an open notebook (Glass Run notebook code equivalent). Use when the user explicitly asks to run the notebook. Default run_notebook=true runs all cells after allowing.",
+        "inputSchema" => Dict{String,Any}(
+            "type"       => "object",
+            "properties" => Dict{String,Any}(
+                "notebook_id"  => Dict("type" => "string", "description" => "Notebook UUID."),
+                "run_notebook" => Dict("type" => "boolean", "description" => "Run all cells after allowing execution. Default: true."),
+            ),
+            "required" => ["notebook_id"],
+        ),
+    ),
 ]
 
 # ---------------------------------------------------------------------------

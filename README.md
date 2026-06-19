@@ -118,6 +118,7 @@ In both cases the MCP client starts up instantly — no waiting for Julia/Pluto 
 | `start_pluto_session` | Start Pluto + MCP HTTP bridge on demand (idempotent) |
 | `stop_pluto_session` | Shut down notebooks and clear session state |
 | `open_notebook` | Load a `.jl` file server-side; safe preview by default (`run_notebook=false`) |
+| `allow_execution` | Exit safe preview on an open notebook (Glass **Run notebook code** equivalent); optional `run_notebook` (default true) |
 
 ### Notebook read/write
 

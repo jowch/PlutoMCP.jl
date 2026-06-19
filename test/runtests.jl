@@ -923,6 +923,55 @@ end
         end
     end
 
+    @testset "lifecycle: allow_execution exits safe preview" begin
+        PlutoMCP.stop_pluto_stack!()
+        fixture = joinpath(@__DIR__, "fixtures", "test_notebook.jl")
+        PlutoMCP.start_pluto_stack!(; launch_browser=false, http_async=true)
+        try
+            open_result = PlutoMCP.tool_open_notebook(Dict(
+                "path"         => fixture,
+                "run_notebook" => false,
+            ))
+            nid = open_result["notebook_id"]
+            @test open_result["execution_allowed"] == false
+
+            allow_result = PlutoMCP.tool_allow_execution(Dict(
+                "notebook_id"  => nid,
+                "run_notebook" => true,
+            ))
+            @test allow_result["execution_allowed"] == true
+            @test allow_result["ran"] == true
+            @test allow_result["already_allowed"] == false
+
+            sess = PlutoMCP.standalone_session()
+            nb = sess.notebooks[UUID(nid)]
+            @test Pluto.will_run_code(nb)
+        finally
+            PlutoMCP.stop_pluto_stack!()
+        end
+    end
+
+    @testset "lifecycle: allow_execution idempotent when already allowed" begin
+        PlutoMCP.stop_pluto_stack!()
+        fixture = joinpath(@__DIR__, "fixtures", "test_notebook.jl")
+        PlutoMCP.start_pluto_stack!(; launch_browser=false, http_async=true)
+        try
+            open_result = PlutoMCP.tool_open_notebook(Dict(
+                "path"         => fixture,
+                "run_notebook" => true,
+            ))
+            nid = open_result["notebook_id"]
+            again = PlutoMCP.tool_allow_execution(Dict(
+                "notebook_id"  => nid,
+                "run_notebook" => false,
+            ))
+            @test again["already_allowed"] == true
+            @test again["execution_allowed"] == true
+        finally
+            PlutoMCP.stop_pluto_stack!()
+        end
+    end
+
     @testset "lifecycle: call_tool_with_session without Pluto" begin
         PlutoMCP.stop_pluto_stack!()
         @test_throws Exception PlutoMCP.call_tool_with_session(
@@ -990,6 +1039,7 @@ end
         @test "start_pluto_session" ∈ names
         @test "stop_pluto_session"  ∈ names
         @test "open_notebook"       ∈ names
+        @test "allow_execution"     ∈ names
     end
 
 end

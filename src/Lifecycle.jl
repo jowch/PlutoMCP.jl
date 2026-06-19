@@ -5,6 +5,7 @@ const LIFECYCLE_TOOLS = Set([
     "start_pluto_session",
     "stop_pluto_session",
     "open_notebook",
+    "allow_execution",
 ])
 
 is_lifecycle_tool(name::AbstractString) = name in LIFECYCLE_TOOLS
@@ -135,6 +136,73 @@ function require_standalone_session!()
     return sess
 end
 
+function _lifecycle_get_notebook!(session, notebook_id_str)
+    nid = try
+        UUID(notebook_id_str)
+    catch
+        throw(ArgumentError("invalid_notebook_id::Invalid notebook ID: '$notebook_id_str'"))
+    end
+    nb = get(session.notebooks, nid, nothing)
+    nb === nothing &&
+        throw(KeyError("notebook_not_found::No notebook with id '$notebook_id_str' in the current session"))
+    return nb
+end
+
+function _lifecycle_notify_browser(session, notebook)
+    try
+        Pluto.send_notebook_changes!(Pluto.ClientRequest(; session, notebook))
+    catch
+    end
+end
+
+"""
+    allow_notebook_execution!(session, notebook; run_async=true)
+
+Programmatic equivalent of Glass **Run notebook code** for safe-preview notebooks
+(local paths only). Mirrors Pluto `restart_process`.
+"""
+function allow_notebook_execution!(session, notebook; run_async::Bool=true)
+    ps = notebook.process_status
+    if ps === Pluto.ProcessStatus.ready
+        return Dict{String,Any}(
+            "notebook_id"       => string(notebook.notebook_id),
+            "execution_allowed" => true,
+            "already_allowed"   => true,
+            "process_status"    => string(ps),
+        )
+    end
+    if ps !== Pluto.ProcessStatus.waiting_for_permission
+        throw(ArgumentError(
+            "execution_not_gated::Notebook is not in safe preview (process_status=$ps)",
+        ))
+    end
+    if haskey(notebook.metadata, "risky_file_source")
+        throw(ArgumentError(
+            "risky_source::Cannot allow execution for risky remote sources via MCP; use Glass UI",
+        ))
+    end
+
+    notebook.process_status = Pluto.ProcessStatus.waiting_to_restart
+    session.options.evaluation.run_notebook_on_load &&
+        Pluto._report_business_cells_planned!(notebook)
+    _lifecycle_notify_browser(session, notebook)
+
+    Pluto.SessionActions.shutdown(session, notebook; keep_in_session=true, async=true, verbose=false)
+
+    notebook.process_status = Pluto.ProcessStatus.starting
+    _lifecycle_notify_browser(session, notebook)
+
+    Pluto.update_save_run!(session, notebook, notebook.cells; run_async=run_async, save=true)
+    _lifecycle_notify_browser(session, notebook)
+
+    Dict{String,Any}(
+        "notebook_id"       => string(notebook.notebook_id),
+        "execution_allowed" => true,
+        "already_allowed"   => false,
+        "process_status"    => string(notebook.process_status),
+    )
+end
+
 # ---------------------------------------------------------------------------
 # Lifecycle tool implementations
 # ---------------------------------------------------------------------------
@@ -175,7 +243,30 @@ function tool_open_notebook(args)
         "path"                => nb.path,
         "execution_allowed"   => run_nb,
         "ran"                 => run_nb,
+        "process_status"      => string(nb.process_status),
     )
+end
+
+function tool_allow_execution(args)
+    sess = require_standalone_session!()
+    notebook_id = get(args, "notebook_id", nothing)
+    notebook_id === nothing &&
+        throw(ArgumentError("invalid_notebook_id::notebook_id is required"))
+    nb = _lifecycle_get_notebook!(sess, String(notebook_id))
+    run_cells = get(args, "run_notebook", true)
+    result = allow_notebook_execution!(sess, nb; run_async=true)
+    if run_cells
+        run_result = tool_run_all_cells(sess, Dict(
+            "notebook_id"         => string(nb.notebook_id),
+            "wait_for_completion" => true,
+        ))
+        result["ran"] = true
+        result["run_warnings"] = get(run_result, "warnings", String[])
+    else
+        result["ran"] = false
+    end
+    result["process_status"] = string(nb.process_status)
+    return result
 end
 
 function call_lifecycle_tool(name::AbstractString, arguments)
@@ -187,6 +278,8 @@ function call_lifecycle_tool(name::AbstractString, arguments)
         tool_stop_pluto_session(arguments)
     elseif name == "open_notebook"
         tool_open_notebook(arguments)
+    elseif name == "allow_execution"
+        tool_allow_execution(arguments)
     else
         throw(ArgumentError("unknown_tool::Unknown lifecycle tool: '$name'"))
     end
