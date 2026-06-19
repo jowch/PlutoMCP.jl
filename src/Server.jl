@@ -134,7 +134,9 @@ function _run_http_mcp_server(pluto_session, port::Int)
                 write(http, """{"error":"Invalid JSON"}""")
                 return
             end
-            resp     = _dispatch_mcp(pluto_session, msg)
+            active   = standalone_session()
+            sess     = active !== nothing ? active : pluto_session
+            resp     = _dispatch_mcp(sess, msg)
             resp_json = resp !== nothing ? JSON3.write(resp) : "{}"
             HTTP.setstatus(http, 200)
             HTTP.setheader(http, "Content-Type" => "application/json")
@@ -152,7 +154,7 @@ function _run_http_mcp_server(pluto_session, port::Int)
         end
     end
 
-    HTTP.serve(handler, "127.0.0.1", port; stream=true, verbose=false)
+    return HTTP.serve!(handler, "127.0.0.1", port; stream=true, verbose=false)
 end
 
 # ---------------------------------------------------------------------------
@@ -237,8 +239,9 @@ function serve(;
     @info "  MCP bridge     → http://localhost:$mcp_port/sse"
     @info "  stdio fallback → julia -e 'using PlutoMCP; PlutoMCP.connect(mcp_port=$mcp_port)'"
 
+    http_server = _run_http_mcp_server(pluto_session, mcp_port)
     try
-        _run_http_mcp_server(pluto_session, mcp_port)
+        wait(http_server)
     finally
         stop_pluto_stack!()
     end

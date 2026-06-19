@@ -12,6 +12,9 @@ is_lifecycle_tool(name::AbstractString) = name in LIFECYCLE_TOOLS
 
 const _STANDALONE_SESSION = Ref{Any}(nothing)
 const _STANDALONE_HTTP_TASK = Ref{Union{Nothing,Task}}(nothing)
+const _STANDALONE_HTTP_SERVER = Ref{Any}(nothing)
+const _STANDALONE_PLUTO_SERVER = Ref{Any}(nothing)
+const _STANDALONE_PLUTO_TASK = Ref{Union{Nothing,Task}}(nothing)
 const _STANDALONE_PLUTO_PORT = Ref(1234)
 const _STANDALONE_MCP_PORT = Ref(2346)
 const _STANDALONE_REQUIRE_SECRET = Ref(true)
@@ -68,12 +71,24 @@ function _init_pluto_session!(; pluto_port, launch_browser, require_secret_for_a
     if notebook !== nothing
         Pluto.SessionActions.open(sess, notebook; run_async = true)
     end
-    @async try
-        Pluto.run!(sess)
-    catch e
-        @error "Pluto server error" exception=(e, catch_backtrace())
+    _STANDALONE_PLUTO_TASK[] = @async begin
+        try
+            server = Pluto.run!(sess)
+            _STANDALONE_PLUTO_SERVER[] = server
+            wait(server)
+        catch e
+            isa(e, InterruptException) || @error "Pluto server error" exception=(e, catch_backtrace())
+        finally
+            _STANDALONE_PLUTO_SERVER[] = nothing
+        end
     end
-    sleep(1.0)
+    deadline = time() + 30.0
+    while time() < deadline
+        _STANDALONE_PLUTO_SERVER[] !== nothing && break
+        sleep(0.05)
+    end
+    _STANDALONE_PLUTO_SERVER[] === nothing &&
+        error("Pluto failed to start on port $pluto_port within 30s")
     sess
 end
 
@@ -107,10 +122,62 @@ function start_pluto_stack!(;
     _STANDALONE_SESSION[] = sess
 
     if http_async
-        _STANDALONE_HTTP_TASK[] = @async _HTTP_BRIDGE_RUNNER[](sess, mcp_port)
+        _STANDALONE_HTTP_TASK[] = @async begin
+            try
+                http_server = _HTTP_BRIDGE_RUNNER[](sess, mcp_port)
+                _STANDALONE_HTTP_SERVER[] = http_server
+                wait(http_server)
+            catch e
+                isa(e, InterruptException) || rethrow()
+            finally
+                _STANDALONE_HTTP_SERVER[] = nothing
+            end
+        end
     end
 
     return session_status_dict()
+end
+
+function _close_standalone_http!()
+    http_server = _STANDALONE_HTTP_SERVER[]
+    if http_server !== nothing
+        try
+            close(http_server)
+        catch
+        end
+        _STANDALONE_HTTP_SERVER[] = nothing
+    end
+    t = _STANDALONE_HTTP_TASK[]
+    if t !== nothing && t !== current_task()
+        try
+            schedule(t, InterruptException(); error=true)
+        catch
+        end
+        try
+            wait(t)
+        catch
+        end
+    end
+    _STANDALONE_HTTP_TASK[] = nothing
+end
+
+function _close_standalone_pluto!()
+    pluto_server = _STANDALONE_PLUTO_SERVER[]
+    if pluto_server !== nothing
+        try
+            close(pluto_server)
+        catch
+        end
+        _STANDALONE_PLUTO_SERVER[] = nothing
+    end
+    t = _STANDALONE_PLUTO_TASK[]
+    if t !== nothing && t !== current_task()
+        try
+            wait(t)
+        catch
+        end
+    end
+    _STANDALONE_PLUTO_TASK[] = nothing
 end
 
 function stop_pluto_stack!()
@@ -124,7 +191,8 @@ function stop_pluto_stack!()
         end
     end
     _STANDALONE_SESSION[] = nothing
-    _STANDALONE_HTTP_TASK[] = nothing
+    _close_standalone_http!()
+    _close_standalone_pluto!()
     reset_staging_state!()
     return session_status_dict()
 end

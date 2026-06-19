@@ -3,6 +3,7 @@ using Pluto
 using Test
 using UUIDs
 using JSON3
+using HTTP
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1001,6 +1002,29 @@ end
         @test resp["result"]["isError"] == true
         err = JSON3.read(resp["result"]["content"][1]["text"])
         @test err["error"] == "pluto_not_running"
+    end
+
+    @testset "lifecycle: stop releases HTTP and Pluto ports" begin
+        PlutoMCP.stop_pluto_stack!()
+        pluto_port = 1250 + rand(0:99)
+        mcp_port = 2450 + rand(0:99)
+        port_up(url) = try
+            HTTP.get(url; readtimeout=1, connect_timeout=1, status_exception=false).status == 200
+        catch
+            false
+        end
+        try
+            PlutoMCP.start_pluto_stack!(; pluto_port, mcp_port, launch_browser=false, http_async=true)
+            @test PlutoMCP.tool_pluto_session_status(Dict{String,Any}())["pluto"] == "running"
+            @test port_up("http://127.0.0.1:$mcp_port/health")
+            @test port_up("http://127.0.0.1:$pluto_port/ping")
+            PlutoMCP.stop_pluto_stack!()
+            sleep(0.5)
+            @test !port_up("http://127.0.0.1:$mcp_port/health")
+            @test !port_up("http://127.0.0.1:$pluto_port/ping")
+        finally
+            PlutoMCP.stop_pluto_stack!()
+        end
     end
 
     @testset "MCP protocol: deferred pluto_session_status" begin
