@@ -927,7 +927,9 @@ end
     @testset "lifecycle: allow_execution exits safe preview" begin
         PlutoMCP.stop_pluto_stack!()
         fixture = joinpath(@__DIR__, "fixtures", "test_notebook.jl")
-        PlutoMCP.start_pluto_stack!(; launch_browser=false, http_async=true)
+        pluto_port = 1250 + rand(0:99)
+        mcp_port = 2450 + rand(0:99)
+        PlutoMCP.start_pluto_stack!(; pluto_port, mcp_port, launch_browser=false, http_async=true)
         try
             open_result = PlutoMCP.tool_open_notebook(Dict(
                 "path"         => fixture,
@@ -955,7 +957,9 @@ end
     @testset "lifecycle: allow_execution idempotent when already allowed" begin
         PlutoMCP.stop_pluto_stack!()
         fixture = joinpath(@__DIR__, "fixtures", "test_notebook.jl")
-        PlutoMCP.start_pluto_stack!(; launch_browser=false, http_async=true)
+        pluto_port = 1250 + rand(0:99)
+        mcp_port = 2450 + rand(0:99)
+        PlutoMCP.start_pluto_stack!(; pluto_port, mcp_port, launch_browser=false, http_async=true)
         try
             open_result = PlutoMCP.tool_open_notebook(Dict(
                 "path"         => fixture,
