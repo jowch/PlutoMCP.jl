@@ -25,5 +25,5 @@
 - **D15 lifecycle:** `pluto_session_status`, `start_pluto_session`, `stop_pluto_session`, `open_notebook`, **`allow_execution`** implemented; deferred standalone `connect()` (no lazy-start on first tool); `start_pluto_session` starts Pluto + HTTP bridge on `:2346`; `stop_pluto_stack!` tears down `:1234`/`:2346` listeners; lifecycle tools on HTTP bridge — not always exposed in Cursor stdio MCP tool picker.
 - **Safe preview:** `open_notebook` default → **remind** user outputs/widgets won't update until **Run notebook code** in Glass (not a hard edit gate); if user asks to run, use **`allow_execution`** or direct to Glass; **`allow_execution`** on risky remote sources still requires Glass UI.
 - Cursor **Styx** plugin spawns deferred `connect()` via `mcp.json` launcher (D15); proxy mode when `:2346/health` already up; **`scripts/pluto-serve.sh` dev-only**.
-- Layer 2 graph/validation MCP tools ship here after Phase 1 validates.
+- **CI.yml** push trigger is **`main`** (was `master` — tests were not running on push).
 - Deterministic eval gate lives in [Styx `eval/`](https://github.com/jowch/styx/tree/main/eval) (`run_reference.jl --all`); PlutoMCP keeps optional `EvalLog.jl` hook only.
