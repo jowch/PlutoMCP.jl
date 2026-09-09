@@ -55,7 +55,7 @@ end
 
 const _SENSITIVE_ARG_KEYS = Set(["context", "dom_path", "visible_text", "query"])
 
-function _sanitize_args(args::Dict{String,Any}, redact_code::Bool)
+function _sanitize_args(args::AbstractDict, redact_code::Bool)
     out = Dict{String,Any}()
     for (k, v) in args
         if redact_code && k == "code"
@@ -89,7 +89,7 @@ function _sanitize_args(args::Dict{String,Any}, redact_code::Bool)
     return out
 end
 
-function _parse_tool_error(result::Dict{String,Any})
+function _parse_tool_error(result::AbstractDict)
     get(result, "isError", false) || return (false, nothing, nothing)
     content = get(result, "content", nothing)
     content === nothing && return (true, "tool_error", nothing)
@@ -110,7 +110,7 @@ function _parse_tool_error(result::Dict{String,Any})
     return (true, "tool_error", nothing)
 end
 
-function log_tool_call(name::String, arguments::Dict{String,Any}, result::Dict{String,Any}, duration_ms::Int)
+function log_tool_call(name::String, arguments::AbstractDict, result::AbstractDict, duration_ms::Int)
     eval_log_enabled() || return nothing
     cfg = _EVAL_CONFIG[]
     is_error, error_type, error_message = _parse_tool_error(result)
