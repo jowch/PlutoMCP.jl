@@ -30,7 +30,7 @@ You start the bridge once when you want Claude to have access. It starts a fresh
 
 ```julia
 using Pkg
-Pkg.add("PlutoMCP")
+Pkg.add(url="https://github.com/mthelm85/PlutoMCP.jl")
 ```
 
 ---
@@ -51,30 +51,22 @@ PlutoMCP.serve(notebook="my_nb.jl", eval_log="/tmp/trace.jsonl")  # agent eval l
 
 `serve()` starts Pluto in the background and blocks, running the MCP HTTP/SSE server. Open the printed Pluto URL in your browser as usual. **Any notebooks you open in the browser are immediately visible to Claude.**
 
-> **`require_secret_for_access`:** forwarded to Pluto `Options` (default `true`). Pass `false` to open `http://localhost:PORT/` without a `?secret=` URL.
+> **`require_secret_for_access`:** forwarded to Pluto `Options` (default `true`). Pass `false` to open
+> `http://localhost:PORT/` without a `?secret=` URL — useful for MCP clients that cannot navigate to a
+> secret URL, or over a trusted SSH port-forward.
+>
+> :warning: **The secret is Pluto's only access control.** With `require_secret_for_access=false`, anything
+> that can reach the port can execute arbitrary Julia code as you — including other users of a shared
+> machine. Only turn it off on a single-user machine or a trusted port-forward.
 
 > **Important**: open your notebooks through the Pluto UI started by `serve()`, not through a separately-started `Pluto.run()`. The MCP bridge owns its own Pluto session; notebooks from other Pluto processes are not shared.
 
 ### Step 2 — Configure your MCP client (one-time)
 
-#### Claude Desktop — HTTP (preferred)
+#### Claude Desktop — stdio
 
-Add to `claude_desktop_config.json`
-(`~/Library/Application Support/Claude/` on macOS, `%APPDATA%\Claude\` on Windows):
-
-```json
-{
-  "mcpServers": {
-    "pluto": {
-      "url": "http://localhost:2346/sse"
-    }
-  }
-}
-```
-
-Claude Desktop connects to the running bridge. **No Pluto process is started by Claude Desktop.** If the bridge is not running, tool calls return a clear error message.
-
-#### Claude Desktop — stdio (recommended for most users)
+`claude_desktop_config.json` supports **stdio servers only** (`command` / `args` / `env`).
+It has no `url` field, so this is the way to wire up Claude Desktop:
 
 ```json
 {
@@ -89,12 +81,50 @@ Claude Desktop connects to the running bridge. **No Pluto process is started by 
 
 `connect()` automatically detects whether an MCP HTTP bridge is running on `:2346`:
 
-- **Bridge running** (e.g. dev `serve()`): proxies all tool calls through the bridge.
-- **No bridge (D15 deferred mode):** MCP stdio stays up; call `start_pluto_session` before notebook tools. Pluto and the HTTP bridge start together on demand.
+- **Bridge running** (e.g. Styx / `serve()`): proxies all tool calls through the bridge, so clients
+  see the live Pluto session and any notebooks you have open in the browser.
+- **No bridge (D15 deferred mode):** MCP stdio stays up; call `start_pluto_session` before notebook
+  tools. Pluto and the HTTP bridge start together on demand.
 
-In both cases the MCP client starts up instantly — no waiting for Julia/Pluto at launch time.
+In both cases the MCP client starts up without waiting for Pluto. The stdio process still loads
+Julia/PlutoMCP (~13 s / ~800 MB resident while idle). If that bothers you, use the `mcp-remote`
+setup below and start the bridge only when you want it.
 
-#### Cursor
+#### Claude Desktop — HTTP via `mcp-remote`
+
+Claude Desktop cannot talk to `http://localhost:2346/sse` directly. Its config file is stdio-only,
+and custom connectors (Settings → Connectors) reach the server from Anthropic's cloud, so they
+require a public HTTPS endpoint — a localhost address is unreachable that way.
+
+To use the HTTP bridge, bridge stdio to it with [`mcp-remote`](https://www.npmjs.com/package/mcp-remote):
+
+```json
+{
+  "mcpServers": {
+    "pluto": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://localhost:2346/sse"]
+    }
+  }
+}
+```
+
+This spawns a small Node process (~38 MB) instead of a Julia one, and starts no Pluto session of
+its own — all tool calls go to the `serve()` bridge. If the bridge is not running, the server
+fails to connect and its tools are simply unavailable until you start it.
+
+#### Claude Code — HTTP (native)
+
+Claude Code speaks HTTP/SSE directly, so it needs **no local process at all**:
+
+```bash
+claude mcp add --transport sse pluto http://localhost:2346/sse
+```
+
+Nothing runs when the bridge is down; Claude Code reports the server as failed to connect and
+everything else keeps working. Start `serve()` and the tools appear.
+
+#### Cursor — HTTP
 
 ```json
 {
@@ -299,7 +329,7 @@ The MCP transport is **HTTP/SSE** (Server-Sent Events). The bridge exposes three
 | `POST /message?sessionId=...` | Receives JSON-RPC 2.0 requests |
 | `GET /health` | Returns `ok` (used by `connect()` to probe the bridge) |
 
-The `connect()` stdio server reads and writes newline-delimited JSON-RPC 2.0 on stdin/stdout, dispatching MCP calls directly without going through the HTTP/SSE bridge. It starts its own Pluto session lazily on first use, so clients that require a subprocess get a fast startup.
+The `connect()` stdio server reads and writes newline-delimited JSON-RPC 2.0 on stdin/stdout, dispatching MCP calls directly without going through the HTTP/SSE bridge. It starts its own Pluto *session* lazily on first tool call — but `using PlutoMCP` loads Pluto at import, so the process still takes ~13 s to answer the initial handshake and holds ~800 MB while idle. When a `serve()` bridge is already running, `connect()` proxies to it instead of starting a second session.
 
 ---
 

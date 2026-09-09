@@ -85,7 +85,7 @@ function _handle_post(http::HTTP.Stream, pluto_session)
 
     body = String(read(http))
     msg  = try
-        JSON3.read(body, Dict{String,Any})
+        JSON.parse(body, Dict{String,Any})
     catch
         HTTP.setstatus(http, 400)
         HTTP.startwrite(http)
@@ -94,7 +94,7 @@ function _handle_post(http::HTTP.Stream, pluto_session)
     end
 
     resp = _dispatch_mcp(pluto_session, msg)
-    isopen(ch) && resp !== nothing && put!(ch, JSON3.write(resp))
+    isopen(ch) && resp !== nothing && put!(ch, JSON.json(resp))
 
     HTTP.setstatus(http, 202)
     HTTP.startwrite(http)
@@ -127,7 +127,7 @@ function _run_http_mcp_server(pluto_session, port::Int)
         elseif method == "POST" && startswith(target, "/call")
             body = String(read(http))
             msg  = try
-                JSON3.read(body, Dict{String,Any})
+                JSON.parse(body, Dict{String,Any})
             catch
                 HTTP.setstatus(http, 400)
                 HTTP.startwrite(http)
@@ -137,7 +137,7 @@ function _run_http_mcp_server(pluto_session, port::Int)
             active   = standalone_session()
             sess     = active !== nothing ? active : pluto_session
             resp     = _dispatch_mcp(sess, msg)
-            resp_json = resp !== nothing ? JSON3.write(resp) : "{}"
+            resp_json = resp !== nothing ? JSON.json(resp) : "{}"
             HTTP.setstatus(http, 200)
             HTTP.setheader(http, "Content-Type" => "application/json")
             HTTP.startwrite(http)
@@ -168,7 +168,14 @@ end
 
 Start a Pluto server and expose it via an MCP HTTP/SSE interface.
 
-Forwards `require_secret_for_access` to Pluto `Options` (default `true`).
+Forwards `require_secret_for_access` to Pluto `Options` (default `true`). Pass `false`
+to serve `http://localhost:PORT/` without a `?secret=` URL.
+
+!!! warning
+    The secret is Pluto's only access control. With `require_secret_for_access=false`,
+    anything that can reach the port can execute arbitrary Julia code as you — including
+    other users of a shared machine. Only turn it off on a single-user machine or a
+    trusted port-forward.
 
 ## Workflow
 
@@ -256,7 +263,9 @@ end
 
 Self-contained stdio MCP server for clients that require a stdio subprocess
 (e.g. Claude Desktop). Forwards `require_secret_for_access` when starting its
-own Pluto session (default `true`; see [`serve`](@ref)).
+own Pluto session (default `true`) — see the warning in [`serve`](@ref) before
+setting it to `false`. Ignored in proxy mode, which uses the running `serve()`
+session's own configuration.
 
 **If a `PlutoMCP.serve()` bridge is already running at `mcp_port`**, this
 function proxies all MCP calls through it — so tool calls reach the live Pluto
@@ -323,11 +332,11 @@ function _run_stdio_proxy(mcp_port::Int)
         resp = try
             r = HTTP.post(
                 "http://127.0.0.1:$mcp_port/call";
-                body    = JSON3.write(msg),
+                body    = JSON.json(msg),
                 headers = ["Content-Type" => "application/json"],
                 readtimeout = 120,
             )
-            JSON3.read(String(r.body), Dict{String,Any})
+            JSON.parse(String(r.body), Dict{String,Any})
         catch e
             _err(id, -32603, "Bridge proxy error: $(sprint(showerror, e))")
         end

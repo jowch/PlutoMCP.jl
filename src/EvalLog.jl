@@ -98,7 +98,7 @@ function _parse_tool_error(result::Dict{String,Any})
         text = get(item, "text", nothing)
         text === nothing && continue
         parsed = try
-            JSON3.read(text, Dict{String,Any})
+            JSON.parse(text, Dict{String,Any})
         catch
             nothing
         end
@@ -129,7 +129,7 @@ function log_tool_call(name::String, arguments::Dict{String,Any}, result::Dict{S
             "duration_ms"   => duration_ms,
         )
     end
-    line = JSON3.write(entry) * "\n"
+    line = JSON.json(entry) * "\n"
     open(cfg.path, "a") do io
         chmod(cfg.path, 0o600)
         write(io, line)

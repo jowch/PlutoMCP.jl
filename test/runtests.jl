@@ -2,7 +2,7 @@ using PlutoMCP
 using Pluto
 using Test
 using UUIDs
-using JSON3
+using JSON
 using HTTP
 
 # ---------------------------------------------------------------------------
@@ -324,14 +324,14 @@ end
 
     # Helper: write a newline-delimited JSON message to a buffer
     function write_msg(buf, msg)
-        write(buf, PlutoMCP.JSON3.write(msg))
+        write(buf, PlutoMCP.JSON.json(msg))
         write(buf, '\n')
     end
 
     # Helper: read one newline-delimited JSON response from a buffer
     function read_resp(buf)
         seekstart(buf)
-        PlutoMCP.JSON3.read(readline(buf; keep=false), Dict{String,Any})
+        PlutoMCP.JSON.parse(readline(buf; keep=false), Dict{String,Any})
     end
 
     @testset "MCP protocol: initialize" begin
@@ -348,6 +348,16 @@ end
         resp = read_resp(buf_out)
         @test resp["result"]["protocolVersion"] == PlutoMCP.MCP_PROTOCOL_VERSION
         @test resp["result"]["serverInfo"]["name"] == "PlutoMCP"
+        @test resp["result"]["serverInfo"]["version"] == PlutoMCP.MCP_SERVER_VERSION
+    end
+
+    @testset "serverInfo.version tracks Project.toml" begin
+        # Regression: MCP_SERVER_VERSION was hardcoded to "1.0.0" and silently
+        # drifted from the released version for several releases.
+        toml = read(joinpath(pkgdir(PlutoMCP), "Project.toml"), String)
+        m    = match(r"(?m)^version\s*=\s*\"([^\"]+)\"", toml)
+        @test m !== nothing
+        @test PlutoMCP.MCP_SERVER_VERSION == m.captures[1]
     end
 
     @testset "MCP protocol: tools/list" begin
@@ -394,7 +404,7 @@ end
 
         resp = read_resp(buf_out)
         @test resp["result"]["isError"] == false
-        data = PlutoMCP.JSON3.read(resp["result"]["content"][1]["text"])
+        data = PlutoMCP.JSON.parse(resp["result"]["content"][1]["text"])
         @test length(data) == 1
         @test data[1]["notebook_id"] == string(nb.notebook_id)
     end
@@ -867,8 +877,8 @@ end
             ))
             lines = filter(!isempty, split(read(log_path, String), '\n'))
             @test length(lines) == 2
-            e1 = JSON3.read(lines[1], Dict{String,Any})
-            e2 = JSON3.read(lines[2], Dict{String,Any})
+            e1 = JSON.parse(lines[1], Dict{String,Any})
+            e2 = JSON.parse(lines[2], Dict{String,Any})
             @test e1["tool"] == "edit_cell"
             @test e1["is_error"] == true
             @test e1["error_type"] == "read_required"
@@ -1004,7 +1014,7 @@ end
 
         resp = read_resp(buf_out)
         @test resp["result"]["isError"] == true
-        err = JSON3.read(resp["result"]["content"][1]["text"])
+        err = JSON.parse(resp["result"]["content"][1]["text"])
         @test err["error"] == "pluto_not_running"
     end
 
@@ -1045,7 +1055,7 @@ end
 
         resp = read_resp(buf_out)
         @test resp["result"]["isError"] == false
-        status = JSON3.read(resp["result"]["content"][1]["text"])
+        status = JSON.parse(resp["result"]["content"][1]["text"])
         @test status["pluto"] == "stopped"
     end
 

@@ -156,6 +156,7 @@ function _run_cells!(session, nb, cells; wait_for_completion=true)
     return warnings
 end
 
+
 # ---------------------------------------------------------------------------
 # Tool implementations
 # ---------------------------------------------------------------------------
