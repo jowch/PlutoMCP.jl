@@ -262,15 +262,15 @@ end
     connect(; pluto_port=1234, mcp_port=2346, require_secret_for_access=true)
 
 Self-contained stdio MCP server for clients that require a stdio subprocess
-(e.g. Claude Desktop). Forwards `require_secret_for_access` when starting its
-own Pluto session (default `true`) — see the warning in [`serve`](@ref) before
-setting it to `false`. Ignored in proxy mode, which uses the running `serve()`
-session's own configuration.
+(e.g. Claude Desktop, Cursor). Forwards `require_secret_for_access` when starting
+its own Pluto session (default `true`) — see the warning in [`serve`](@ref)
+before setting it to `false`. Ignored when proxying to a running `serve()`
+session, which uses that process's own configuration.
 
-**If a `PlutoMCP.serve()` bridge is already running at `mcp_port`**, this
-function proxies all MCP calls through it — so tool calls reach the live Pluto
-session that `serve()` owns, including any notebooks you have open in your
-browser.
+**Per-message attach:** if this process has not started Pluto, and an HTTP
+bridge answers `GET /health` on `mcp_port`, the call is proxied to that bridge.
+That covers a `serve()` that was already up *and* one that appears later
+(Cursor Remote SSH: agent starts Pluto on the host, Cursor forwards `:2346`).
 
 **If no bridge is running**, standalone deferred mode: MCP stdio stays up; call
 `start_pluto_session` before notebook tools (D15).
@@ -299,50 +299,52 @@ browser.
 ```
 """
 function connect(; pluto_port=1234, mcp_port=2346, require_secret_for_access=true)
-    # Check if a PlutoMCP HTTP bridge is already running.
-    bridge_running = try
+    _run_standalone_stdio(pluto_port, mcp_port; require_secret_for_access)
+end
+
+function bridge_running(mcp_port::Integer)
+    try
         resp = HTTP.get("http://127.0.0.1:$mcp_port/health";
                         readtimeout=2, connect_timeout=1)
         resp.status == 200
     catch
         false
     end
+end
 
-    if bridge_running
-        @info "PlutoMCP: bridge detected at :$mcp_port — proxying stdio through it"
-        _run_stdio_proxy(mcp_port)
-    else
-        _run_standalone_stdio(pluto_port, mcp_port; require_secret_for_access)
+function _proxy_mcp_message(mcp_port::Integer, msg::Dict{String,Any})
+    id = get(msg, "id", nothing)
+    try
+        r = HTTP.post(
+            "http://127.0.0.1:$mcp_port/call";
+            body    = JSON.json(msg),
+            headers = ["Content-Type" => "application/json"],
+            readtimeout = 120,
+        )
+        JSON.parse(String(r.body), Dict{String,Any})
+    catch e
+        id === nothing && return nothing
+        _err(id, -32603, "Bridge proxy error: $(sprint(showerror, e))")
     end
 end
 
-# ---------------------------------------------------------------------------
-# Proxy mode: forward stdio MCP calls to an existing HTTP bridge via /call
-# ---------------------------------------------------------------------------
+"""
+Dispatch one stdio JSON-RPC message.
 
-function _run_stdio_proxy(mcp_port::Int)
-    while !eof(stdin)
-        msg = _read_message(stdin)
-        msg === nothing && break
+Uses an in-process standalone session when this process owns Pluto; otherwise
+proxies to a live HTTP bridge on `mcp_port` when `/health` is up.
+"""
+function dispatch_stdio_message(msg::Dict{String,Any}; mcp_port::Integer = _STANDALONE_MCP_PORT[])
+    get(msg, "id", nothing) === nothing && return nothing
 
-        id = get(msg, "id", nothing)
-        # Notifications (no id) require no response
-        id === nothing && continue
-
-        resp = try
-            r = HTTP.post(
-                "http://127.0.0.1:$mcp_port/call";
-                body    = JSON.json(msg),
-                headers = ["Content-Type" => "application/json"],
-                readtimeout = 120,
-            )
-            JSON.parse(String(r.body), Dict{String,Any})
-        catch e
-            _err(id, -32603, "Bridge proxy error: $(sprint(showerror, e))")
-        end
-
-        _write_message(stdout, resp)
+    local_sess = standalone_session()
+    if local_sess !== nothing
+        return _dispatch_mcp(local_sess, msg)
     end
+    if bridge_running(mcp_port)
+        return _proxy_mcp_message(mcp_port, msg)
+    end
+    return _dispatch_mcp(nothing, msg)
 end
 
 # ---------------------------------------------------------------------------
@@ -364,12 +366,7 @@ function _run_standalone_stdio(pluto_port::Int, mcp_port::Int; require_secret_fo
         msg = _read_message(stdin)
         msg === nothing && break
 
-        id = get(msg, "id", nothing)
-        # Notifications (no id) require no response
-        id === nothing && continue
-
-        sess = standalone_session()
-        resp = _dispatch_mcp(sess, msg)
+        resp = dispatch_stdio_message(msg; mcp_port)
         resp === nothing && continue
         _write_message(stdout, resp)
     end

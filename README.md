@@ -79,10 +79,11 @@ It has no `url` field, so this is the way to wire up Claude Desktop:
 }
 ```
 
-`connect()` automatically detects whether an MCP HTTP bridge is running on `:2346`:
+`connect()` checks `GET /health` on `:2346` **on each tool call** (not only at process start):
 
-- **Bridge running** (e.g. Styx / `serve()`): proxies all tool calls through the bridge, so clients
-  see the live Pluto session and any notebooks you have open in the browser.
+- **Bridge running** (e.g. Styx / `serve()`, including one started later on a Remote SSH host):
+  proxies tool calls through the bridge so clients see that Pluto session.
+- **This process already started Pluto:** uses the in-process session (does not proxy).
 - **No bridge (D15 deferred mode):** MCP stdio stays up; call `start_pluto_session` before notebook
   tools. Pluto and the HTTP bridge start together on demand.
 

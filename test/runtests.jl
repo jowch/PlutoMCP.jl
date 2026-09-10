@@ -1080,4 +1080,64 @@ end
         @test "allow_execution"     ∈ names
     end
 
+    @testset "dispatch_stdio_message lazy-attaches to a later bridge" begin
+        PlutoMCP.stop_pluto_stack!()
+        mcp_port = 2700 + rand(0:99)
+        status_msg = Dict{String,Any}(
+            "jsonrpc" => "2.0",
+            "id" => 1,
+            "method" => "tools/call",
+            "params" => Dict{String,Any}(
+                "name" => "pluto_session_status",
+                "arguments" => Dict{String,Any}(),
+            ),
+        )
+
+        local_resp = PlutoMCP.dispatch_stdio_message(status_msg; mcp_port)
+        local_status = JSON.parse(local_resp["result"]["content"][1]["text"])
+        @test local_status["pluto"] == "stopped"
+
+        server = HTTP.serve!(function (http::HTTP.Stream)
+            method = http.message.method
+            target = http.message.target
+            if method == "GET" && target == "/health"
+                HTTP.setstatus(http, 200)
+                HTTP.startwrite(http)
+                write(http, "ok")
+            elseif method == "POST" && startswith(target, "/call")
+                read(http)
+                HTTP.setstatus(http, 200)
+                HTTP.setheader(http, "Content-Type" => "application/json")
+                HTTP.startwrite(http)
+                write(http, JSON.json(Dict{String,Any}(
+                    "jsonrpc" => "2.0",
+                    "id" => 1,
+                    "result" => Dict{String,Any}("from" => "bridge"),
+                )))
+            else
+                HTTP.setstatus(http, 404)
+                HTTP.startwrite(http)
+            end
+        end, "127.0.0.1", Int(mcp_port); stream=true, verbose=false)
+        try
+            deadline = time() + 5.0
+            while time() < deadline && !PlutoMCP.bridge_running(mcp_port)
+                sleep(0.05)
+            end
+            @test PlutoMCP.bridge_running(mcp_port)
+            proxied = PlutoMCP.dispatch_stdio_message(status_msg; mcp_port)
+            @test proxied["result"]["from"] == "bridge"
+
+            session = Pluto.ServerSession()
+            PlutoMCP.bind_standalone_session!(session)
+            owned = PlutoMCP.dispatch_stdio_message(status_msg; mcp_port)
+            owned_status = JSON.parse(owned["result"]["content"][1]["text"])
+            @test owned_status["pluto"] == "running"
+            @test !haskey(owned["result"], "from")
+        finally
+            PlutoMCP.stop_pluto_stack!()
+            close(server)
+        end
+    end
+
 end
