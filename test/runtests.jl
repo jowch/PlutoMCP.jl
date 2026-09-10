@@ -4,6 +4,8 @@ using Test
 using UUIDs
 using JSON
 using HTTP
+using Sockets
+using SHA
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1080,8 +1082,9 @@ end
         @test "allow_execution"     ∈ names
     end
 
-    @testset "dispatch_stdio_message lazy-attaches to a later bridge" begin
-        PlutoMCP.stop_pluto_stack!()
+    @testset "dispatch_stdio_message lazy-attaches to a later bridge (legacy unbound)" begin
+        PlutoMCP.stop_pluto_stack!(; close_control_bridge=true)
+        PlutoMCP.clear_session_binding_ref!()
         mcp_port = 2700 + rand(0:99)
         status_msg = Dict{String,Any}(
             "jsonrpc" => "2.0",
@@ -1135,9 +1138,293 @@ end
             @test owned_status["pluto"] == "running"
             @test !haskey(owned["result"], "from")
         finally
-            PlutoMCP.stop_pluto_stack!()
+            PlutoMCP.stop_pluto_stack!(; close_control_bridge=true)
             close(server)
         end
+    end
+
+    # ---------------------------------------------------------------------------
+    # Bound Styx sessions — owned control bridges + notebook leases
+    # ---------------------------------------------------------------------------
+
+    function bound_runtime_setup(; host_pid=getpid() + rand(1000:9999))
+        runtime = mktempdir()
+        binding_file = joinpath(runtime, "windows", "$(host_pid).json")
+        binding = PlutoMCP.SessionBinding(;
+            runtime_dir = runtime,
+            binding_file = binding_file,
+            cursor_host_pid = host_pid,
+        )
+        PlutoMCP.configure_session_binding!(binding)
+        PlutoMCP.claim_window_binding!(binding)
+        hint = 28000 + rand(0:999)
+        PlutoMCP.configure_standalone!(;
+            pluto_port_hint = hint + 1000,
+            mcp_port_hint = hint,
+            require_secret_for_access = false,
+        )
+        port = PlutoMCP.start_control_bridge!(; mcp_port_hint = hint, listenany = true)
+        return runtime, binding, Int(port)
+    end
+
+    function bound_runtime_teardown!()
+        PlutoMCP.stop_pluto_stack!(; close_control_bridge = true)
+        PlutoMCP.cleanup_session_binding!()
+        PlutoMCP.configure_standalone!(; pluto_port=1234, mcp_port=2346, require_secret_for_access=true)
+    end
+
+    @testset "bound: JSON health and session header" begin
+        PlutoMCP.stop_pluto_stack!(; close_control_bridge=true)
+        PlutoMCP.clear_session_binding_ref!()
+        runtime, binding, port = bound_runtime_setup()
+        try
+            resp = HTTP.get("http://127.0.0.1:$port/health"; readtimeout=2, connect_timeout=1)
+            @test resp.status == 200
+            health = JSON.parse(String(resp.body), Dict{String,Any})
+            @test health["status"] == "ok"
+            @test health["session_id"] == binding.session_id
+            @test health["mcp_port"] == port
+            @test health["pluto"] == "stopped"
+
+            bad = HTTP.post(
+                "http://127.0.0.1:$port/call";
+                body = JSON.json(Dict("jsonrpc"=>"2.0","id"=>1,"method"=>"tools/call",
+                    "params"=>Dict("name"=>"pluto_session_status","arguments"=>Dict()))),
+                headers = ["Content-Type" => "application/json"],
+                status_exception = false,
+                readtimeout = 5,
+            )
+            @test bad.status == 409
+            @test occursin("foreign_session", String(bad.body))
+
+            good = HTTP.post(
+                "http://127.0.0.1:$port/call";
+                body = JSON.json(Dict("jsonrpc"=>"2.0","id"=>1,"method"=>"tools/call",
+                    "params"=>Dict("name"=>"pluto_session_status","arguments"=>Dict()))),
+                headers = [
+                    "Content-Type" => "application/json",
+                    PlutoMCP.STYX_SESSION_HEADER => binding.session_id,
+                ],
+                readtimeout = 5,
+            )
+            @test good.status == 200
+            payload = JSON.parse(String(good.body), Dict{String,Any})
+            status = JSON.parse(payload["result"]["content"][1]["text"], Dict{String,Any})
+            @test status["managed"] == true
+            @test status["session_id"] == binding.session_id
+            @test isfile(binding.binding_file)
+        finally
+            bound_runtime_teardown!()
+            rm(runtime; recursive=true, force=true)
+        end
+    end
+
+    @testset "bound: two concurrent control bridges" begin
+        PlutoMCP.stop_pluto_stack!(; close_control_bridge=true)
+        PlutoMCP.clear_session_binding_ref!()
+        runtime_a, binding_a, port_a = bound_runtime_setup(; host_pid = 910001)
+        # Second binding in the same process replaces the module binding ref — use raw HTTP servers.
+        # Exercise listenany by starting a second owned bridge via a fresh HTTP serve! with JSON health.
+        port_b_hint = port_a
+        server_b = HTTP.serve!(function (http::HTTP.Stream)
+            if http.message.method == "GET" && startswith(http.message.target, "/health")
+                HTTP.setstatus(http, 200)
+                HTTP.setheader(http, "Content-Type" => "application/json")
+                HTTP.startwrite(http)
+                write(http, JSON.json(Dict("status"=>"ok","session_id"=>"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","mcp_port"=>0)))
+            else
+                HTTP.setstatus(http, 404)
+                HTTP.startwrite(http)
+            end
+        end, "127.0.0.1", port_b_hint; stream=true, verbose=false, listenany=true)
+        try
+            port_b = HTTP.port(server_b)
+            @test port_a != port_b
+            ha = JSON.parse(String(HTTP.get("http://127.0.0.1:$port_a/health").body))
+            hb = JSON.parse(String(HTTP.get("http://127.0.0.1:$port_b/health").body))
+            @test ha["session_id"] == binding_a.session_id
+            @test hb["session_id"] != ha["session_id"]
+        finally
+            close(server_b)
+            bound_runtime_teardown!()
+            rm(runtime_a; recursive=true, force=true)
+        end
+    end
+
+    @testset "bound: refuses foreign bridge proxy adoption" begin
+        PlutoMCP.stop_pluto_stack!(; close_control_bridge=true)
+        PlutoMCP.clear_session_binding_ref!()
+        runtime, binding, port = bound_runtime_setup()
+        foreign_port = port + 50
+        foreign = HTTP.serve!(function (http::HTTP.Stream)
+            if http.message.method == "GET" && startswith(http.message.target, "/health")
+                HTTP.setstatus(http, 200)
+                HTTP.startwrite(http)
+                write(http, "ok")
+            elseif http.message.method == "POST"
+                read(http)
+                HTTP.setstatus(http, 200)
+                HTTP.setheader(http, "Content-Type" => "application/json")
+                HTTP.startwrite(http)
+                write(http, JSON.json(Dict("jsonrpc"=>"2.0","id"=>1,"result"=>Dict("from"=>"foreign"))))
+            else
+                HTTP.setstatus(http, 404)
+                HTTP.startwrite(http)
+            end
+        end, "127.0.0.1", Int(foreign_port); stream=true, verbose=false)
+        try
+            @test PlutoMCP.bridge_running(foreign_port)
+            msg = Dict{String,Any}(
+                "jsonrpc" => "2.0",
+                "id" => 1,
+                "method" => "tools/call",
+                "params" => Dict{String,Any}(
+                    "name" => "pluto_session_status",
+                    "arguments" => Dict{String,Any}(),
+                ),
+            )
+            resp = PlutoMCP.dispatch_stdio_message(msg; mcp_port = foreign_port)
+            status = JSON.parse(resp["result"]["content"][1]["text"])
+            @test status["session_id"] == binding.session_id
+            @test !haskey(resp["result"], "from")
+        finally
+            close(foreign)
+            bound_runtime_teardown!()
+            rm(runtime; recursive=true, force=true)
+        end
+    end
+
+    @testset "bound: occupied pluto_port_hint selects free port" begin
+        PlutoMCP.stop_pluto_stack!(; close_control_bridge=true)
+        PlutoMCP.clear_session_binding_ref!()
+        runtime, binding, mcp_port = bound_runtime_setup()
+        occupied_hint = 41000 + rand(0:500)
+        blocker = Sockets.listen(Sockets.ip"127.0.0.1", occupied_hint)
+        try
+            PlutoMCP.configure_standalone!(;
+                pluto_port_hint = occupied_hint,
+                mcp_port_hint = mcp_port,
+                require_secret_for_access = false,
+            )
+            status = PlutoMCP.start_pluto_stack!()
+            @test status["pluto"] == "running"
+            @test status["pluto_port"] != occupied_hint
+            @test status["pluto_url"] == "http://127.0.0.1:$(status["pluto_port"])"
+            @test HTTP.get("http://127.0.0.1:$(status["pluto_port"])/ping"; readtimeout=2).status == 200
+
+            stopped = PlutoMCP.tool_stop_pluto_session(Dict{String,Any}())
+            @test stopped["pluto"] == "stopped"
+            @test stopped["pluto_url"] === nothing
+            # Control bridge still alive
+            health = JSON.parse(String(HTTP.get("http://127.0.0.1:$mcp_port/health").body))
+            @test health["session_id"] == binding.session_id
+            @test health["pluto"] == "stopped"
+        finally
+            close(blocker)
+            bound_runtime_teardown!()
+            rm(runtime; recursive=true, force=true)
+        end
+    end
+
+    @testset "bound: notebook path lease conflict and stale recovery" begin
+        PlutoMCP.stop_pluto_stack!(; close_control_bridge=true)
+        PlutoMCP.clear_session_binding_ref!()
+        fixture_src = joinpath(@__DIR__, "fixtures", "test_notebook.jl")
+        fixture_hash = bytes2hex(open(sha256, fixture_src))
+        copy_a = joinpath(mktempdir(), "nb.jl")
+        cp(fixture_src, copy_a)
+
+        # Same host runtime_dir — notebook leases are shared across sessions.
+        runtime = mktempdir()
+        binding_a = PlutoMCP.SessionBinding(;
+            runtime_dir = runtime,
+            binding_file = joinpath(runtime, "windows", "920001.json"),
+            cursor_host_pid = 920001,
+        )
+        PlutoMCP.configure_session_binding!(binding_a)
+        PlutoMCP.claim_window_binding!(binding_a)
+        hint = 28000 + rand(0:999)
+        PlutoMCP.configure_standalone!(;
+            pluto_port_hint = hint + 1000,
+            mcp_port_hint = hint,
+            require_secret_for_access = false,
+        )
+        port_a = Int(PlutoMCP.start_control_bridge!(; mcp_port_hint = hint, listenany = true))
+        try
+            PlutoMCP.start_pluto_stack!()
+            opened = PlutoMCP.tool_open_notebook(Dict("path" => copy_a, "run_notebook" => false))
+            @test haskey(opened, "notebook_id")
+
+            binding_b = PlutoMCP.SessionBinding(;
+                runtime_dir = runtime,
+                binding_file = joinpath(runtime, "windows", "920002.json"),
+                cursor_host_pid = 920002,
+            )
+            PlutoMCP.configure_session_binding!(binding_b)
+            ha = JSON.parse(String(HTTP.get("http://127.0.0.1:$port_a/health").body))
+            @test ha["session_id"] == binding_a.session_id
+
+            err = try
+                PlutoMCP.acquire_notebook_lease!(copy_a)
+                nothing
+            catch e
+                e
+            end
+            @test err isa ArgumentError
+            @test occursin("notebook_in_use", sprint(showerror, err))
+
+            # Stop A so its lease becomes stale; B can then acquire.
+            PlutoMCP.configure_session_binding!(binding_a)
+            PlutoMCP.stop_pluto_stack!(; close_control_bridge = true)
+            PlutoMCP.cleanup_session_binding!()
+
+            PlutoMCP.configure_session_binding!(binding_b)
+            PlutoMCP.claim_window_binding!(binding_b)
+            binding_b.mcp_port = 1
+            lease = PlutoMCP.acquire_notebook_lease!(copy_a)
+            @test lease.canonical_path == realpath(copy_a)
+            PlutoMCP._release_lease_dir_if_ours!(binding_b, lease.lease_dir)
+            PlutoMCP.cleanup_session_binding!()
+        finally
+            bound_runtime_teardown!()
+            rm(runtime; recursive=true, force=true)
+            rm(dirname(copy_a); recursive=true, force=true)
+            @test bytes2hex(open(sha256, fixture_src)) == fixture_hash
+        end
+    end
+
+    @testset "bound: same-session duplicate open keeps Pluto behavior" begin
+        PlutoMCP.stop_pluto_stack!(; close_control_bridge=true)
+        PlutoMCP.clear_session_binding_ref!()
+        fixture_src = joinpath(@__DIR__, "fixtures", "test_notebook.jl")
+        copy_path = joinpath(mktempdir(), "dup.jl")
+        cp(fixture_src, copy_path)
+        runtime, _, _ = bound_runtime_setup()
+        try
+            PlutoMCP.start_pluto_stack!()
+            first = PlutoMCP.tool_open_notebook(Dict("path" => copy_path, "run_notebook" => false))
+            @test haskey(first, "notebook_id")
+            @test_throws Pluto.SessionActions.NotebookIsRunningException begin
+                PlutoMCP.tool_open_notebook(Dict("path" => copy_path, "run_notebook" => false))
+            end
+        finally
+            bound_runtime_teardown!()
+            rm(runtime; recursive=true, force=true)
+            rm(dirname(copy_path); recursive=true, force=true)
+        end
+    end
+
+    @testset "bound: binding cleanup removes window files" begin
+        PlutoMCP.stop_pluto_stack!(; close_control_bridge=true)
+        PlutoMCP.clear_session_binding_ref!()
+        runtime, binding, port = bound_runtime_setup()
+        @test isfile(binding.binding_file)
+        @test isdir(binding.claim_dir)
+        bound_runtime_teardown!()
+        @test !isfile(binding.binding_file)
+        @test !isdir(binding.claim_dir)
+        @test_throws Exception HTTP.get("http://127.0.0.1:$port/health"; readtimeout=1, connect_timeout=1)
+        rm(runtime; recursive=true, force=true)
     end
 
 end

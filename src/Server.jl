@@ -104,7 +104,11 @@ end
 # HTTP/SSE MCP server
 # ---------------------------------------------------------------------------
 
-function _run_http_mcp_server(pluto_session, port::Int)
+function _run_http_mcp_server(pluto_session, port::Int; listenany::Bool=false)
+    # Capture identity at bind time so /health never follows a later global swap.
+    bound_snapshot = session_binding()
+    bound = bound_snapshot !== nothing
+
     function handler(http::HTTP.Stream)
         # CORS on every response
         HTTP.setheader(http, "Access-Control-Allow-Origin" => "*")
@@ -114,18 +118,30 @@ function _run_http_mcp_server(pluto_session, port::Int)
 
         if method == "OPTIONS"
             HTTP.setheader(http, "Access-Control-Allow-Methods" => "GET, POST, OPTIONS")
-            HTTP.setheader(http, "Access-Control-Allow-Headers" => "Content-Type")
+            allow = bound ? "Content-Type, $STYX_SESSION_HEADER" : "Content-Type"
+            HTTP.setheader(http, "Access-Control-Allow-Headers" => allow)
             HTTP.setstatus(http, 200)
             HTTP.startwrite(http)
 
-        elseif method == "GET" && startswith(target, "/sse")
+        elseif !bound && method == "GET" && startswith(target, "/sse")
             _handle_sse(http)
 
-        elseif method == "POST" && startswith(target, "/message")
+        elseif !bound && method == "POST" && startswith(target, "/message")
             _handle_post(http, pluto_session)
 
         elseif method == "POST" && startswith(target, "/call")
+            # Must read the body before responding (HTTP.jl stream contract).
             body = String(read(http))
+            if bound
+                hdr = HTTP.header(http.message, STYX_SESSION_HEADER, "")
+                if hdr != bound_snapshot.session_id
+                    HTTP.setstatus(http, 409)
+                    HTTP.setheader(http, "Content-Type" => "application/json")
+                    HTTP.startwrite(http)
+                    write(http, """{"error":"foreign_session","message":"The loopback bridge does not match this Cursor window's Styx session."}""")
+                    return
+                end
+            end
             msg  = try
                 JSON.parse(body, Dict{String,Any})
             catch
@@ -143,10 +159,16 @@ function _run_http_mcp_server(pluto_session, port::Int)
             HTTP.startwrite(http)
             write(http, resp_json)
 
-        elseif method == "GET" && target == "/health"
+        elseif method == "GET" && (target == "/health" || startswith(target, "/health?"))
             HTTP.setstatus(http, 200)
-            HTTP.startwrite(http)
-            write(http, "ok")
+            if bound
+                HTTP.setheader(http, "Content-Type" => "application/json")
+                HTTP.startwrite(http)
+                write(http, JSON.json(health_payload(bound_snapshot)))
+            else
+                HTTP.startwrite(http)
+                write(http, "ok")
+            end
 
         else
             HTTP.setstatus(http, 404)
@@ -154,7 +176,10 @@ function _run_http_mcp_server(pluto_session, port::Int)
         end
     end
 
-    return HTTP.serve!(handler, "127.0.0.1", port; stream=true, verbose=false)
+    return HTTP.serve!(
+        handler, "127.0.0.1", port;
+        stream=true, verbose=false, listenany=listenany,
+    )
 end
 
 # ---------------------------------------------------------------------------
@@ -259,33 +284,27 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    connect(; pluto_port=1234, mcp_port=2346, require_secret_for_access=true)
+    connect(; pluto_port=1234, mcp_port=2346, require_secret_for_access=true,
+              binding_file=nothing, runtime_dir=nothing, cursor_host_pid=nothing,
+              pluto_port_hint=nothing, mcp_port_hint=nothing)
 
 Self-contained stdio MCP server for clients that require a stdio subprocess
 (e.g. Claude Desktop, Cursor). Forwards `require_secret_for_access` when starting
 its own Pluto session (default `true`) — see the warning in [`serve`](@ref)
-before setting it to `false`. Ignored when proxying to a running `serve()`
-session, which uses that process's own configuration.
+before setting it to `false`.
 
-**Per-message attach:** if this process has not started Pluto, and an HTTP
+**Bound mode (Styx):** pass `binding_file`, `runtime_dir`, and `cursor_host_pid`.
+Owns a loopback control bridge immediately, publishes a JSON `/health` nonce, and
+never proxies to a foreign bridge. Ports are allocated with `listenany` from the
+hint values (`pluto_port_hint` / `mcp_port_hint`, falling back to `pluto_port` /
+`mcp_port`).
+
+**Legacy unbound mode:** if this process has not started Pluto, and an HTTP
 bridge answers `GET /health` on `mcp_port`, the call is proxied to that bridge.
-That covers a `serve()` that was already up *and* one that appears later
-(Cursor Remote SSH: agent starts Pluto on the host, Cursor forwards `:2346`).
+If no bridge is running, deferred mode: call `start_pluto_session` before notebook
+tools (D15).
 
-**If no bridge is running**, standalone deferred mode: MCP stdio stays up; call
-`start_pluto_session` before notebook tools (D15).
-
-## Recommended workflow
-
-1. Start the bridge once in a terminal:
-   ```julia
-   using PlutoMCP
-   PlutoMCP.serve()   # Pluto on :1234, MCP bridge on :2346
-   ```
-2. Open notebooks in the Pluto browser UI.
-3. Claude Desktop (configured below) will find them automatically.
-
-## Claude Desktop config
+## Claude Desktop config (legacy)
 
 ```json
 {
@@ -298,8 +317,26 @@ That covers a `serve()` that was already up *and* one that appears later
 }
 ```
 """
-function connect(; pluto_port=1234, mcp_port=2346, require_secret_for_access=true)
-    _run_standalone_stdio(pluto_port, mcp_port; require_secret_for_access)
+function connect(;
+    pluto_port=1234,
+    mcp_port=2346,
+    require_secret_for_access=true,
+    binding_file=nothing,
+    runtime_dir=nothing,
+    cursor_host_pid=nothing,
+    pluto_port_hint=nothing,
+    mcp_port_hint=nothing,
+)
+    _run_standalone_stdio(
+        pluto_port,
+        mcp_port;
+        require_secret_for_access,
+        binding_file,
+        runtime_dir,
+        cursor_host_pid,
+        pluto_port_hint,
+        mcp_port_hint,
+    )
 end
 
 function bridge_running(mcp_port::Integer)
@@ -331,17 +368,18 @@ end
 """
 Dispatch one stdio JSON-RPC message.
 
-Uses an in-process standalone session when this process owns Pluto; otherwise
+Bound mode always dispatches in-process (never proxies).
+Legacy mode uses an in-process session when this process owns Pluto; otherwise
 proxies to a live HTTP bridge on `mcp_port` when `/health` is up.
 """
-function dispatch_stdio_message(msg::Dict{String,Any}; mcp_port::Integer = _STANDALONE_MCP_PORT[])
+function dispatch_stdio_message(msg::Dict{String,Any}; mcp_port::Union{Integer,Nothing} = _STANDALONE_MCP_PORT[])
     get(msg, "id", nothing) === nothing && return nothing
 
     local_sess = standalone_session()
-    if local_sess !== nothing
+    if local_sess !== nothing || is_bound_session()
         return _dispatch_mcp(local_sess, msg)
     end
-    if bridge_running(mcp_port)
+    if mcp_port !== nothing && bridge_running(mcp_port)
         return _proxy_mcp_message(mcp_port, msg)
     end
     return _dispatch_mcp(nothing, msg)
@@ -351,23 +389,58 @@ end
 # Standalone mode: deferred Pluto (D15) — lifecycle tools start the session
 # ---------------------------------------------------------------------------
 
-function _run_standalone_stdio(pluto_port::Int, mcp_port::Int; require_secret_for_access=true)
+function _run_standalone_stdio(
+    pluto_port::Int,
+    mcp_port::Int;
+    require_secret_for_access=true,
+    binding_file=nothing,
+    runtime_dir=nothing,
+    cursor_host_pid=nothing,
+    pluto_port_hint=nothing,
+    mcp_port_hint=nothing,
+)
+    bound = binding_file !== nothing || runtime_dir !== nothing || cursor_host_pid !== nothing
+    if bound
+        (binding_file === nothing || runtime_dir === nothing || cursor_host_pid === nothing) &&
+            error("styx_identity_unavailable::bound connect() requires binding_file, runtime_dir, and cursor_host_pid")
+        configure_session_binding!(SessionBinding(;
+            runtime_dir = String(runtime_dir),
+            binding_file = String(binding_file),
+            cursor_host_pid = Int(cursor_host_pid),
+        ))
+        claim_window_binding!(session_binding())
+    end
+
+    hint_pluto = pluto_port_hint === nothing ? pluto_port : Int(pluto_port_hint)
+    hint_mcp = mcp_port_hint === nothing ? mcp_port : Int(mcp_port_hint)
     configure_standalone!(;
         pluto_port = pluto_port,
         mcp_port = mcp_port,
+        pluto_port_hint = hint_pluto,
+        mcp_port_hint = hint_mcp,
         require_secret_for_access = require_secret_for_access,
     )
 
-    if get(ENV, "PLUTOMCP_AUTO_SERVE", "0") == "1"
-        start_pluto_stack!()
-    end
+    try
+        if bound
+            start_control_bridge!(; mcp_port_hint = hint_mcp, listenany = true)
+        end
 
-    while !eof(stdin)
-        msg = _read_message(stdin)
-        msg === nothing && break
+        if get(ENV, "PLUTOMCP_AUTO_SERVE", "0") == "1"
+            start_pluto_stack!()
+        end
 
-        resp = dispatch_stdio_message(msg; mcp_port)
-        resp === nothing && continue
-        _write_message(stdout, resp)
+        while !eof(stdin)
+            msg = _read_message(stdin)
+            msg === nothing && break
+
+            port = _STANDALONE_MCP_PORT[]
+            resp = dispatch_stdio_message(msg; mcp_port = port === nothing ? mcp_port : port)
+            resp === nothing && continue
+            _write_message(stdout, resp)
+        end
+    finally
+        stop_pluto_stack!(; close_control_bridge = true)
+        cleanup_session_binding!()
     end
 end
