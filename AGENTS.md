@@ -27,3 +27,11 @@
 - Cursor **Styx** plugin spawns deferred `connect()` via `mcp.json` launcher (D15); proxy mode when `:2346/health` already up; **`scripts/pluto-serve.sh` dev-only**.
 - **CI.yml** push trigger is **`main`** (was `master` — tests were not running on push).
 - Deterministic eval gate lives in [Styx `eval/`](https://github.com/jowch/styx/tree/main/eval) (`run_reference.jl --all`); PlutoMCP keeps optional `EvalLog.jl` hook only.
+
+## Cursor Cloud specific instructions
+
+- **Runtime:** Julia is installed via `juliaup` at `~/.juliaup/bin` (currently 1.11; `~/.bashrc`/`~/.profile` add it to `PATH`). Non-login shells may not have it on `PATH` — use `~/.juliaup/bin/julia` directly if `julia` is not found.
+- **Deps / tests / run** follow the standard commands already documented (README + `.github/workflows/CI.yml`): install `julia --project=. -e 'using Pkg; Pkg.instantiate()'`; test `julia --project=. -e 'using Pkg; Pkg.test()'`. The suite (~208 assertions) starts real `Pluto.run!` sessions on random ports and takes several minutes — not a fast unit run.
+- **Run the app:** `julia --project=. -e 'using PlutoMCP; PlutoMCP.serve(pluto_port=1234, mcp_port=2346, launch_browser=false, require_secret_for_access=false)'`. `serve()` blocks, so run it in a background/tmux session. It exposes the Pluto UI on `:1234` and the MCP HTTP bridge on `:2346` (`GET /health`, `GET /sse`, `POST /call` with a JSON-RPC `tools/call` body). Drive tools by POSTing to `/call`.
+- **Formatting:** `JuliaFormatter` is not a declared dependency and there is no formatter gate in CI (`.JuliaFormatter.toml` is defaults-only). `src/` is not in strict default-JuliaFormatter style, so do **not** bulk-reformat as part of unrelated changes.
+- **JSON:** this package uses `JSON.jl` (not `JSON3`). See the Styx `AGENTS.md` cloud section for the eval-harness JSON3 caveat when running Styx's `eval/` against this checkout.
