@@ -519,6 +519,7 @@ end
         @test result["applied"] == true
         @test result["mutation"]["type"] == "delete_cell"
         @test haskey(result, "cell_order")
+        @test any(startswith(w, "async_execution::") for w in result["warnings"])
     end
 
     @testset "move_cell receipt includes cell_order" begin
@@ -999,9 +1000,38 @@ end
             @test allow_result["execution_allowed"] == true
             @test allow_result["ran"] == true
             @test allow_result["already_allowed"] == false
+            @test any(startswith(w, "async_execution::") for w in get(allow_result, "run_warnings", String[]))
 
             sess = PlutoMCP.standalone_session()
             nb = sess.notebooks[UUID(nid)]
+            @test Pluto.will_run_code(nb)
+        finally
+            PlutoMCP.stop_pluto_stack!()
+        end
+    end
+
+    @testset "lifecycle: allow_execution run_notebook=false exits gate without full run" begin
+        PlutoMCP.stop_pluto_stack!()
+        fixture = joinpath(@__DIR__, "fixtures", "test_notebook.jl")
+        pluto_port = 1250 + rand(0:99)
+        mcp_port = 2450 + rand(0:99)
+        PlutoMCP.start_pluto_stack!(; pluto_port, mcp_port, launch_browser=false, http_async=true)
+        try
+            open_result = PlutoMCP.tool_open_notebook(Dict(
+                "path"         => fixture,
+                "run_notebook" => false,
+            ))
+            nid = open_result["notebook_id"]
+            allow_result = PlutoMCP.tool_allow_execution(Dict(
+                "notebook_id"  => nid,
+                "run_notebook" => false,
+            ))
+            @test allow_result["execution_allowed"] == true
+            @test allow_result["ran"] == false
+            @test allow_result["already_allowed"] == false
+            sess = PlutoMCP.standalone_session()
+            nb = sess.notebooks[UUID(nid)]
+            @test nb.process_status === Pluto.ProcessStatus.ready
             @test Pluto.will_run_code(nb)
         finally
             PlutoMCP.stop_pluto_stack!()
@@ -1222,6 +1252,41 @@ end
         PlutoMCP.stop_pluto_stack!(; close_control_bridge = true)
         PlutoMCP.cleanup_session_binding!()
         PlutoMCP.configure_standalone!(; pluto_port=1234, mcp_port=2346, require_secret_for_access=true)
+    end
+
+    @testset "bound: wait_for_completion forced async" begin
+        PlutoMCP.stop_pluto_stack!(; close_control_bridge=true)
+        PlutoMCP.clear_session_binding_ref!()
+        runtime = mktempdir()
+        try
+            binding = PlutoMCP.SessionBinding(;
+                runtime_dir = runtime,
+                binding_file = joinpath(runtime, "windows", "force-wait.json"),
+                cursor_host_pid = getpid() + 4242,
+            )
+            PlutoMCP.configure_session_binding!(binding)
+            @test PlutoMCP.is_bound_session()
+            wait_for, warnings = PlutoMCP._effective_wait(true)
+            @test wait_for == false
+            @test any(startswith(w, "wait_forced_async::") for w in warnings)
+            wait_ok, empty_w = PlutoMCP._effective_wait(false)
+            @test wait_ok == false
+            @test isempty(empty_w)
+
+            session, nb, cells = make_session_with_notebook("x = 1")
+            Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+            receipt = PlutoMCP.tool_execute_cell(session, Dict(
+                "notebook_id"         => string(nb.notebook_id),
+                "cell_id"             => string(cells[1].cell_id),
+                "wait_for_completion" => true,
+            ))
+            @test any(startswith(w, "wait_forced_async::") for w in receipt["warnings"])
+            @test any(startswith(w, "async_execution::") for w in receipt["warnings"])
+            @test receipt["execution"]["status"] == "running"
+        finally
+            PlutoMCP.clear_session_binding_ref!()
+            rm(runtime; recursive=true, force=true)
+        end
     end
 
     @testset "bound: JSON health and session header" begin

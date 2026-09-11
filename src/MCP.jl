@@ -320,24 +320,24 @@ const MCP_TOOLS = [
     ),
     Dict{String,Any}(
         "name"        => "open_notebook",
-        "description" => "Load a .jl notebook file into the live Pluto session (user-confirmed path). Default safe preview (no auto-run); set run_notebook=true to queue a non-blocking full run.",
+        "description" => "Load a .jl notebook file into the live Pluto session (user-confirmed path). Default safe preview (no auto-run); set run_notebook=true to queue a single non-blocking full run via SessionActions.open (no second run_all).",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(
                 "path"          => Dict("type" => "string", "description" => "Filesystem path to the notebook .jl file."),
-                "run_notebook"  => Dict("type" => "boolean", "description" => "Run all cells after open. Default: false (safe preview)."),
+                "run_notebook"  => Dict("type" => "boolean", "description" => "Queue a non-blocking full run after open. Default: false (safe preview)."),
             ),
             "required" => ["path"],
         ),
     ),
     Dict{String,Any}(
         "name"        => "allow_execution",
-        "description" => "Exit safe preview on an open notebook (Glass Run notebook code equivalent). Use when the user explicitly asks to run the notebook. Default run_notebook=true queues a non-blocking full run (poll read_cell for completion).",
+        "description" => "Exit safe preview on an open notebook (Glass Run notebook code equivalent). Use when the user explicitly asks to run the notebook. Default run_notebook=true queues a single non-blocking full run (poll read_cell for completion). run_notebook=false exits the gate without queuing a run.",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(
                 "notebook_id"  => Dict("type" => "string", "description" => "Notebook UUID."),
-                "run_notebook" => Dict("type" => "boolean", "description" => "Run all cells after allowing execution. Default: true."),
+                "run_notebook" => Dict("type" => "boolean", "description" => "Queue a non-blocking full run after allowing execution. Default: true. false exits safe preview only."),
             ),
             "required" => ["notebook_id"],
         ),
