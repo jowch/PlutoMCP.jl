@@ -9,20 +9,22 @@
 ```
 You (terminal)            AI Tool (Claude Desktop, …)
       │                             │
-      │ PlutoMCP.serve()            │  stdio → auto-proxies to bridge
+      │ PlutoMCP.serve()            │  stdio → proxies only in legacy unbound mode
       ▼                             ▼
-PlutoMCP bridge  ◄────────── connect() detects :2346 and proxies
-      │                   OR connects directly via HTTP/SSE
+PlutoMCP bridge  ◄────────── connect() (legacy) may proxy to :2346
+      │                   OR Styx bound connect() owns its own bridge
       │  direct Julia API calls
       ▼
-Pluto.ServerSession / Pluto.Notebook  (port 1234)
+Pluto.ServerSession / Pluto.Notebook  (port 1234, or dynamic in bound mode)
       │
       │  WebSocket push
       ▼
 Browser  (live view — notebooks you open here are visible to AI tools)
 ```
 
-You start the bridge once when you want Claude to have access. It starts a fresh Pluto session; open notebooks through the Pluto browser UI that `serve()` prints. Claude Desktop configured with `connect()` (stdio) **automatically detects the running bridge** and proxies through it — no reconfiguration needed.
+You start the bridge once when you want Claude to have access. It starts a fresh Pluto session; open notebooks through the Pluto browser UI that `serve()` prints. Claude Desktop configured with legacy `connect()` (stdio) **automatically detects the running bridge** and proxies through it — no reconfiguration needed.
+
+**Styx / bound mode:** embedding clients pass `binding_file`, `runtime_dir`, and `cursor_host_pid` to `connect()`. Bound mode binds a loopback control bridge immediately, publishes a JSON `/health` with a session nonce, never proxies to a foreign bridge, allocates ports with `listenany`, and leases canonical notebook paths so two bound sessions cannot open the same file.
 
 ---
 
@@ -79,13 +81,15 @@ It has no `url` field, so this is the way to wire up Claude Desktop:
 }
 ```
 
-`connect()` checks `GET /health` on `:2346` **on each tool call** (not only at process start):
+`connect()` in **legacy unbound** mode checks `GET /health` on `:2346` **on each tool call** (not only at process start):
 
-- **Bridge running** (e.g. Styx / `serve()`, including one started later on a Remote SSH host):
+- **Bridge running** (e.g. `serve()`, including one started later on a Remote SSH host):
   proxies tool calls through the bridge so clients see that Pluto session.
 - **This process already started Pluto:** uses the in-process session (does not proxy).
 - **No bridge (D15 deferred mode):** MCP stdio stays up; call `start_pluto_session` before notebook
   tools. Pluto and the HTTP bridge start together on demand.
+
+**Bound mode** (Styx): never proxies. The control bridge is owned by this process; `/health` returns JSON including `session_id`, and `/call` requires `X-Styx-Session-ID`.
 
 In both cases the MCP client starts up without waiting for Pluto. The stdio process still loads
 Julia/PlutoMCP (~13 s / ~800 MB resident while idle). If that bothers you, use the `mcp-remote`
@@ -326,11 +330,12 @@ The MCP transport is **HTTP/SSE** (Server-Sent Events). The bridge exposes three
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /sse` | Establishes the SSE stream; returns a `sessionId` |
-| `POST /message?sessionId=...` | Receives JSON-RPC 2.0 requests |
-| `GET /health` | Returns `ok` (used by `connect()` to probe the bridge) |
+| `GET /sse` | Establishes the SSE stream; returns a `sessionId` (legacy `serve()` only) |
+| `POST /message?sessionId=...` | Receives JSON-RPC 2.0 requests (legacy `serve()` only) |
+| `GET /health` | Legacy: plain `ok`. Bound: JSON `{status,session_id,mcp_port,pluto_port,pluto}` |
+| `POST /call` | JSON-RPC tools/call. Bound mode requires `X-Styx-Session-ID` |
 
-The `connect()` stdio server reads and writes newline-delimited JSON-RPC 2.0 on stdin/stdout, dispatching MCP calls directly without going through the HTTP/SSE bridge. It starts its own Pluto *session* lazily on first tool call — but `using PlutoMCP` loads Pluto at import, so the process still takes ~13 s to answer the initial handshake and holds ~800 MB while idle. When a `serve()` bridge is already running, `connect()` proxies to it instead of starting a second session.
+The `connect()` stdio server reads and writes newline-delimited JSON-RPC 2.0 on stdin/stdout. Legacy unbound mode may proxy to a running `serve()` bridge. Bound mode always dispatches in-process against its owned control bridge and deferred Pluto session.
 
 ---
 

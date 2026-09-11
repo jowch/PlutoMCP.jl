@@ -290,7 +290,7 @@ const MCP_TOOLS = [
     ),
     Dict{String,Any}(
         "name"        => "pluto_session_status",
-        "description" => "Return whether the Pluto server is running and which notebooks are open in this session.",
+        "description" => "Return whether Pluto is running, open notebooks, and (when managed) session_id plus mcp/pluto URLs.",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(),
@@ -299,19 +299,19 @@ const MCP_TOOLS = [
     ),
     Dict{String,Any}(
         "name"        => "start_pluto_session",
-        "description" => "Start the Pluto server and MCP HTTP bridge on demand (idempotent). Required before notebook read/write tools in deferred standalone mode.",
+        "description" => "Start the Pluto server on demand (idempotent). Required before notebook read/write tools in deferred standalone mode. Bound Styx sessions allocate ports automatically — ignore pluto_port/mcp_port and read pluto_url from the result.",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(
-                "pluto_port" => Dict("type" => "integer", "description" => "Pluto UI port. Default: 1234."),
-                "mcp_port"   => Dict("type" => "integer", "description" => "MCP HTTP bridge port. Default: 2346."),
+                "pluto_port" => Dict("type" => "integer", "description" => "Pluto UI port (legacy unbound only). Default: 1234."),
+                "mcp_port"   => Dict("type" => "integer", "description" => "MCP HTTP bridge port (legacy unbound only). Default: 2346."),
             ),
             "required" => String[],
         ),
     ),
     Dict{String,Any}(
         "name"        => "stop_pluto_session",
-        "description" => "Shut down notebooks in the standalone Pluto session and clear server state.",
+        "description" => "Shut down notebooks and the Pluto server. Bound Styx sessions keep the control bridge alive for a later start_pluto_session.",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(),

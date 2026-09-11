@@ -15,20 +15,34 @@ const _STANDALONE_HTTP_TASK = Ref{Union{Nothing,Task}}(nothing)
 const _STANDALONE_HTTP_SERVER = Ref{Any}(nothing)
 const _STANDALONE_PLUTO_SERVER = Ref{Any}(nothing)
 const _STANDALONE_PLUTO_TASK = Ref{Union{Nothing,Task}}(nothing)
-const _STANDALONE_PLUTO_PORT = Ref(1234)
-const _STANDALONE_MCP_PORT = Ref(2346)
+const _STANDALONE_PLUTO_PORT = Ref{Union{Nothing,Int}}(1234)
+const _STANDALONE_MCP_PORT = Ref{Union{Nothing,Int}}(2346)
+const _STANDALONE_PLUTO_PORT_HINT = Ref(1234)
+const _STANDALONE_MCP_PORT_HINT = Ref(2346)
 const _STANDALONE_REQUIRE_SECRET = Ref(true)
+const _CONTROL_BRIDGE_OWNED = Ref(false)
 const _HTTP_BRIDGE_RUNNER = Ref{Function}(
-    (session, port) -> error("HTTP bridge not registered"),
+    (session, port; kwargs...) -> error("HTTP bridge not registered"),
 )
 
 function register_http_bridge!(f::Function)
     _HTTP_BRIDGE_RUNNER[] = f
 end
 
-function configure_standalone!(; pluto_port=1234, mcp_port=2346, require_secret_for_access=true)
-    _STANDALONE_PLUTO_PORT[] = pluto_port
-    _STANDALONE_MCP_PORT[] = mcp_port
+function configure_standalone!(;
+    pluto_port=1234,
+    mcp_port=2346,
+    pluto_port_hint=nothing,
+    mcp_port_hint=nothing,
+    require_secret_for_access=true,
+)
+    hint_pluto = pluto_port_hint === nothing ? Int(pluto_port) : Int(pluto_port_hint)
+    hint_mcp = mcp_port_hint === nothing ? Int(mcp_port) : Int(mcp_port_hint)
+    _STANDALONE_PLUTO_PORT_HINT[] = hint_pluto
+    _STANDALONE_MCP_PORT_HINT[] = hint_mcp
+    # Legacy callers still treat these as fixed ports until listenany overrides them.
+    _STANDALONE_PLUTO_PORT[] = Int(pluto_port)
+    _STANDALONE_MCP_PORT[] = Int(mcp_port)
     _STANDALONE_REQUIRE_SECRET[] = require_secret_for_access
 end
 
@@ -53,23 +67,80 @@ end
 
 function session_status_dict()
     sess = _STANDALONE_SESSION[]
-    Dict{String,Any}(
-        "pluto"      => sess === nothing ? "stopped" : "running",
-        "pluto_port" => _STANDALONE_PLUTO_PORT[],
-        "mcp_port"   => _STANDALONE_MCP_PORT[],
+    binding = session_binding()
+    pluto_port = _STANDALONE_PLUTO_PORT[]
+    mcp_port = _STANDALONE_MCP_PORT[]
+    pluto = sess === nothing ? "stopped" : "running"
+    status = Dict{String,Any}(
+        "pluto"      => pluto,
+        "pluto_port" => pluto_port,
+        "mcp_port"   => mcp_port,
         "notebooks"  => sess === nothing ? [] : _notebook_summaries(sess),
+        "managed"    => binding !== nothing,
     )
+    if binding !== nothing
+        status["session_id"] = binding.session_id
+        status["mcp_url"] = mcp_port === nothing ? nothing : "http://127.0.0.1:$mcp_port"
+        status["pluto_url"] =
+            (pluto == "running" && pluto_port !== nothing) ?
+            "http://127.0.0.1:$pluto_port" : nothing
+    else
+        status["session_id"] = nothing
+        status["mcp_url"] = mcp_port === nothing ? nothing : "http://127.0.0.1:$mcp_port"
+        status["pluto_url"] =
+            (pluto == "running" && pluto_port !== nothing) ?
+            "http://127.0.0.1:$pluto_port" : nothing
+    end
+    status
 end
 
-function _init_pluto_session!(; pluto_port, launch_browser, require_secret_for_access, notebook)
-    opts = Pluto.Configuration.from_flat_kwargs(
-        port                      = pluto_port,
-        launch_browser            = launch_browser,
-        require_secret_for_access = require_secret_for_access,
-    )
+function _publish_binding_ports!(; pluto::Union{Nothing,String}=nothing)::Nothing
+    binding = session_binding()
+    binding === nothing && return nothing
+    lock(binding.lock) do
+        binding.mcp_port = _STANDALONE_MCP_PORT[]
+        binding.pluto_port = _STANDALONE_PLUTO_PORT[]
+        if pluto !== nothing
+            binding.pluto = pluto
+        else
+            binding.pluto = _STANDALONE_SESSION[] === nothing ? "stopped" : "running"
+        end
+    end
+    write_binding_state!()
+    nothing
+end
+
+function _handle_pluto_event(event)::Nothing
+    if event isa Pluto.ServerStartEvent
+        _STANDALONE_PLUTO_PORT[] = Int(event.port)
+        _publish_binding_ports!(; pluto="running")
+    elseif event isa Pluto.ShutdownNotebookEvent
+        release_notebook_lease!(event.notebook.notebook_id)
+    end
+    nothing
+end
+
+function _init_pluto_session!(; pluto_port, pluto_port_hint, launch_browser, require_secret_for_access, notebook)
+    bound = is_bound_session()
+    opts = if bound
+        Pluto.Configuration.from_flat_kwargs(
+            port                      = nothing,
+            port_hint                 = pluto_port_hint,
+            launch_browser            = launch_browser,
+            require_secret_for_access = require_secret_for_access,
+            on_event                  = _handle_pluto_event,
+        )
+    else
+        Pluto.Configuration.from_flat_kwargs(
+            port                      = pluto_port,
+            launch_browser            = launch_browser,
+            require_secret_for_access = require_secret_for_access,
+            on_event                  = _handle_pluto_event,
+        )
+    end
     sess = Pluto.ServerSession(; options = opts)
     if notebook !== nothing
-        Pluto.SessionActions.open(sess, notebook; run_async = true)
+        Pluto.SessionActions.open(sess, String(notebook); run_async = true)
     end
     _STANDALONE_PLUTO_TASK[] = @async begin
         try
@@ -88,18 +159,72 @@ function _init_pluto_session!(; pluto_port, launch_browser, require_secret_for_a
         sleep(0.05)
     end
     _STANDALONE_PLUTO_SERVER[] === nothing &&
-        error("Pluto failed to start on port $pluto_port within 30s")
+        error("Pluto failed to start within 30s (port=$pluto_port hint=$pluto_port_hint)")
+    if bound
+        deadline2 = time() + 5.0
+        while time() < deadline2 && _STANDALONE_PLUTO_PORT[] === nothing
+            sleep(0.05)
+        end
+        _STANDALONE_PLUTO_PORT[] === nothing &&
+            error("Pluto started but ServerStartEvent.port was not observed (hint=$pluto_port_hint)")
+    end
     sess
+end
+
+"""
+    start_control_bridge!(; mcp_port_hint, listenany)
+
+Bind the loopback MCP control HTTP server. In bound mode this runs at `connect()`
+time so `/health` publishes the session nonce before Pluto starts.
+"""
+function start_control_bridge!(;
+    mcp_port_hint::Int = _STANDALONE_MCP_PORT_HINT[],
+    listenany::Bool = is_bound_session(),
+)
+    _STANDALONE_HTTP_SERVER[] !== nothing && return _STANDALONE_MCP_PORT[]
+
+    ready = Channel{Any}(1)
+    _STANDALONE_HTTP_TASK[] = @async begin
+        try
+            http_server = _HTTP_BRIDGE_RUNNER[](
+                nothing,
+                mcp_port_hint;
+                listenany = listenany,
+            )
+            _STANDALONE_HTTP_SERVER[] = http_server
+            actual = try
+                HTTP.port(http_server)
+            catch
+                mcp_port_hint
+            end
+            _STANDALONE_MCP_PORT[] = Int(actual)
+            _CONTROL_BRIDGE_OWNED[] = true
+            put!(ready, Int(actual))
+            wait(http_server)
+        catch e
+            put!(ready, e)
+            isa(e, InterruptException) || rethrow()
+        finally
+            _STANDALONE_HTTP_SERVER[] = nothing
+            _CONTROL_BRIDGE_OWNED[] = false
+        end
+    end
+
+    result = take!(ready)
+    result isa Exception && throw(result)
+    _publish_binding_ports!()
+    return result
 end
 
 """
     start_pluto_stack!(; pluto_port, mcp_port, require_secret_for_access, launch_browser, notebook, http_async)
 
-Start Pluto.run! and the MCP HTTP bridge. Idempotent when already running.
+Start Pluto.run! and, when no control bridge is owned yet, the MCP HTTP bridge.
+Idempotent when Pluto is already running.
 """
 function start_pluto_stack!(;
-    pluto_port::Int = _STANDALONE_PLUTO_PORT[],
-    mcp_port::Int = _STANDALONE_MCP_PORT[],
+    pluto_port::Union{Int,Nothing} = nothing,
+    mcp_port::Union{Int,Nothing} = nothing,
     require_secret_for_access::Bool = _STANDALONE_REQUIRE_SECRET[],
     launch_browser::Bool = false,
     notebook = nothing,
@@ -109,22 +234,42 @@ function start_pluto_stack!(;
         return session_status_dict()
     end
 
-    _STANDALONE_PLUTO_PORT[] = pluto_port
-    _STANDALONE_MCP_PORT[] = mcp_port
+    bound = is_bound_session()
+    if bound
+        pluto_port !== nothing && throw(ArgumentError(
+            "managed_ports::This Styx session allocates ports automatically; use pluto_session_status.pluto_url.",
+        ))
+        mcp_port !== nothing && throw(ArgumentError(
+            "managed_ports::This Styx session allocates ports automatically; use pluto_session_status.pluto_url.",
+        ))
+    end
+
+    resolved_pluto = pluto_port === nothing ? _STANDALONE_PLUTO_PORT_HINT[] : pluto_port
+    resolved_mcp = mcp_port === nothing ? _STANDALONE_MCP_PORT_HINT[] : mcp_port
+    if !bound
+        _STANDALONE_PLUTO_PORT[] = resolved_pluto
+        _STANDALONE_MCP_PORT[] = resolved_mcp
+    else
+        # Actual UI port comes from ServerStartEvent; clear until then.
+        _STANDALONE_PLUTO_PORT[] = nothing
+    end
     _STANDALONE_REQUIRE_SECRET[] = require_secret_for_access
 
     sess = _init_pluto_session!(;
-        pluto_port,
+        pluto_port = resolved_pluto,
+        pluto_port_hint = _STANDALONE_PLUTO_PORT_HINT[],
         launch_browser,
         require_secret_for_access,
         notebook,
     )
     _STANDALONE_SESSION[] = sess
+    _publish_binding_ports!(; pluto="running")
 
-    if http_async
+    # Legacy path: start HTTP with Pluto when connect() did not already bind a control bridge.
+    if http_async && !_CONTROL_BRIDGE_OWNED[] && _STANDALONE_HTTP_SERVER[] === nothing
         _STANDALONE_HTTP_TASK[] = @async begin
             try
-                http_server = _HTTP_BRIDGE_RUNNER[](sess, mcp_port)
+                http_server = _HTTP_BRIDGE_RUNNER[](sess, resolved_mcp; listenany=false)
                 _STANDALONE_HTTP_SERVER[] = http_server
                 wait(http_server)
             catch e
@@ -159,6 +304,7 @@ function _close_standalone_http!()
         end
     end
     _STANDALONE_HTTP_TASK[] = nothing
+    _CONTROL_BRIDGE_OWNED[] = false
 end
 
 function _close_standalone_pluto!()
@@ -180,7 +326,13 @@ function _close_standalone_pluto!()
     _STANDALONE_PLUTO_TASK[] = nothing
 end
 
-function stop_pluto_stack!()
+"""
+    stop_pluto_stack!(; close_control_bridge=true)
+
+Shut down Pluto notebooks and the Pluto server. When `close_control_bridge` is
+false (bound `stop_pluto_session`), the control HTTP bridge stays up.
+"""
+function stop_pluto_stack!(; close_control_bridge::Bool = !is_bound_session())
     sess = _STANDALONE_SESSION[]
     if sess !== nothing
         for nb in collect(values(sess.notebooks))
@@ -191,8 +343,14 @@ function stop_pluto_stack!()
         end
     end
     _STANDALONE_SESSION[] = nothing
-    _close_standalone_http!()
+    release_all_notebook_leases!()
     _close_standalone_pluto!()
+    if close_control_bridge
+        _close_standalone_http!()
+    elseif is_bound_session()
+        _STANDALONE_PLUTO_PORT[] = nothing
+        _publish_binding_ports!(; pluto="stopped")
+    end
     reset_staging_state!()
     return session_status_dict()
 end
@@ -280,13 +438,28 @@ function tool_pluto_session_status(_args)
 end
 
 function tool_start_pluto_session(args)
-    pluto_port = get(args, "pluto_port", _STANDALONE_PLUTO_PORT[])
-    mcp_port = get(args, "mcp_port", _STANDALONE_MCP_PORT[])
+    bound = is_bound_session()
+    if bound
+        if haskey(args, "pluto_port") && args["pluto_port"] !== nothing
+            throw(ArgumentError(
+                "managed_ports::This Styx session allocates ports automatically; use pluto_session_status.pluto_url.",
+            ))
+        end
+        if haskey(args, "mcp_port") && args["mcp_port"] !== nothing
+            throw(ArgumentError(
+                "managed_ports::This Styx session allocates ports automatically; use pluto_session_status.pluto_url.",
+            ))
+        end
+        return start_pluto_stack!()
+    end
+    pluto_port = get(args, "pluto_port", _STANDALONE_PLUTO_PORT_HINT[])
+    mcp_port = get(args, "mcp_port", _STANDALONE_MCP_PORT_HINT[])
     start_pluto_stack!(; pluto_port = Int(pluto_port), mcp_port = Int(mcp_port))
 end
 
 function tool_stop_pluto_session(_args)
-    stop_pluto_stack!()
+    # Bound mode: keep control bridge; legacy: tear everything down.
+    stop_pluto_stack!(; close_control_bridge = !is_bound_session())
 end
 
 function tool_open_notebook(args)
