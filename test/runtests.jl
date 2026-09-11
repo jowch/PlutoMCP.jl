@@ -1020,6 +1020,15 @@ end
                 "run_notebook" => true,
             ))
             nid = open_result["notebook_id"]
+            sess = PlutoMCP.standalone_session()
+            nb = sess.notebooks[UUID(nid)]
+            # open_notebook(run_notebook=true) queues a non-blocking run; wait until ready.
+            deadline = time() + 60.0
+            while time() < deadline && nb.process_status !== Pluto.ProcessStatus.ready
+                sleep(0.05)
+            end
+            @test nb.process_status === Pluto.ProcessStatus.ready
+
             again = PlutoMCP.tool_allow_execution(Dict(
                 "notebook_id"  => nid,
                 "run_notebook" => false,
