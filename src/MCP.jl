@@ -41,7 +41,7 @@ const MCP_TOOLS = [
                 "notebook_id" => Dict("type" => "string", "description" => "The notebook UUID."),
                 "cell_id"     => Dict("type" => "string", "description" => "The cell UUID."),
                 "code"        => Dict("type" => "string", "description" => "New cell code."),
-                "run_after"   => Dict("type" => "boolean", "description" => "Run the cell after updating. Default: false."),
+                "run_after"   => Dict("type" => "boolean", "description" => "Run the cell after updating (non-blocking). Default: false."),
             ),
             "required" => ["notebook_id", "cell_id", "code"],
         ),
@@ -78,7 +78,7 @@ const MCP_TOOLS = [
                 "notebook_id"   => Dict("type" => "string", "description" => "The notebook UUID."),
                 "code"          => Dict("type" => "string", "description" => "Initial cell code."),
                 "after_cell_id" => Dict("type" => "string", "description" => "Insert after this cell UUID; required when notebook is non-empty."),
-                "run_after"     => Dict("type" => "boolean", "description" => "Run the new cell after inserting. Default: false."),
+                "run_after"     => Dict("type" => "boolean", "description" => "Run the new cell after inserting (non-blocking). Default: false."),
             ),
             "required" => ["notebook_id", "code"],
         ),
@@ -97,20 +97,20 @@ const MCP_TOOLS = [
     ),
     Dict{String,Any}(
         "name"        => "execute_cell",
-        "description" => "Run a specific cell (Shift+Enter). Clears that cell from pending_run when execution finishes. Optionally wait for completion.",
+        "description" => "Run a specific cell (Shift+Enter). Default wait_for_completion=false queues the run and returns immediately (poll read_cell); pass true only when a synchronous result is required on a durable session.",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(
                 "notebook_id"         => Dict("type" => "string", "description" => "The notebook UUID."),
                 "cell_id"             => Dict("type" => "string", "description" => "The cell UUID."),
-                "wait_for_completion" => Dict("type" => "boolean", "description" => "Block until the cell finishes. Default: true."),
+                "wait_for_completion" => Dict("type" => "boolean", "description" => "Block until the cell finishes. Default: false (non-blocking; preferred for stdio-bound sessions)."),
             ),
             "required" => ["notebook_id", "cell_id"],
         ),
     ),
     Dict{String,Any}(
         "name"        => "submit_changes",
-        "description" => "Run all staged (dirty) cells, like Cmd+S in Pluto. Runs reactive dependents automatically. Explicit cell_ids must be in pending_run unless force=true. With wait_for_completion=false, pending_run clears in the background when execution finishes.",
+        "description" => "Run all staged (dirty) cells, like Cmd+S in Pluto. Runs reactive dependents automatically. Explicit cell_ids must be in pending_run unless force=true. Default wait_for_completion=false queues the run and clears pending_run in the background; poll read_cell / read_notebook_code for completion. Pass true only when a synchronous result is required on a durable session.",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(
@@ -121,7 +121,7 @@ const MCP_TOOLS = [
                     "description" => "Optional subset of cell IDs to run; defaults to all pending staged cells.",
                 ),
                 "force"               => Dict("type" => "boolean", "description" => "Allow running cell_ids not in pending_run. Default: false."),
-                "wait_for_completion" => Dict("type" => "boolean", "description" => "Block until cells finish. Default: true."),
+                "wait_for_completion" => Dict("type" => "boolean", "description" => "Block until cells finish. Default: false (non-blocking; preferred for stdio-bound sessions)."),
             ),
             "required" => ["notebook_id"],
         ),
@@ -320,7 +320,7 @@ const MCP_TOOLS = [
     ),
     Dict{String,Any}(
         "name"        => "open_notebook",
-        "description" => "Load a .jl notebook file into the live Pluto session (user-confirmed path). Default safe preview (no auto-run); set run_notebook=true to execute all cells.",
+        "description" => "Load a .jl notebook file into the live Pluto session (user-confirmed path). Default safe preview (no auto-run); set run_notebook=true to queue a non-blocking full run.",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(
@@ -332,7 +332,7 @@ const MCP_TOOLS = [
     ),
     Dict{String,Any}(
         "name"        => "allow_execution",
-        "description" => "Exit safe preview on an open notebook (Glass Run notebook code equivalent). Use when the user explicitly asks to run the notebook. Default run_notebook=true runs all cells after allowing.",
+        "description" => "Exit safe preview on an open notebook (Glass Run notebook code equivalent). Use when the user explicitly asks to run the notebook. Default run_notebook=true queues a non-blocking full run (poll read_cell for completion).",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(

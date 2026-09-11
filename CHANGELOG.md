@@ -16,6 +16,7 @@ All notable changes to this project are documented here.
 
 ### Changed
 
+- **Non-blocking wait defaults:** `submit_changes` / `execute_cell` default `wait_for_completion=false`; `run_after=true`, `allow_execution` / `open_notebook(run_notebook=true)` also queue runs without blocking the MCP call (stdio starvation mitigation for Styx [#3](https://github.com/jowch/styx/issues/3))
 - Legacy unbound `connect()` / `serve()` behavior retained for non-Styx clients (plain `/health` `ok`, optional proxy to `:2346`)
 
 ## [1.4.1] — prior
