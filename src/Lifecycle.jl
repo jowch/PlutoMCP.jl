@@ -382,18 +382,22 @@ function _lifecycle_notify_browser(session, notebook)
 end
 
 """
-    allow_notebook_execution!(session, notebook; run_async=true)
+    allow_notebook_execution!(session, notebook; run_async=true, run_cells=true)
 
 Programmatic equivalent of Glass **Run notebook code** for safe-preview notebooks
-(local paths only). Mirrors Pluto `restart_process`.
+(local paths only). Mirrors Pluto `restart_process` when `run_cells=true`.
+
+When `run_cells=false`, exits safe preview without queuing a full notebook run
+(workspace starts lazily on the next `submit_changes` / `update_save_run!`).
 """
-function allow_notebook_execution!(session, notebook; run_async::Bool=true)
+function allow_notebook_execution!(session, notebook; run_async::Bool=true, run_cells::Bool=true)
     ps = notebook.process_status
     if ps === Pluto.ProcessStatus.ready
         return Dict{String,Any}(
             "notebook_id"       => string(notebook.notebook_id),
             "execution_allowed" => true,
             "already_allowed"   => true,
+            "ran"               => false,
             "process_status"    => string(ps),
         )
     end
@@ -415,16 +419,25 @@ function allow_notebook_execution!(session, notebook; run_async::Bool=true)
 
     Pluto.SessionActions.shutdown(session, notebook; keep_in_session=true, async=true, verbose=false)
 
-    notebook.process_status = Pluto.ProcessStatus.starting
-    _lifecycle_notify_browser(session, notebook)
-
-    Pluto.update_save_run!(session, notebook, notebook.cells; run_async=run_async, save=true)
-    _lifecycle_notify_browser(session, notebook)
+    if run_cells
+        notebook.process_status = Pluto.ProcessStatus.starting
+        _lifecycle_notify_browser(session, notebook)
+        # Non-blocking by default: sync_nbpkg + reactive run stay off the MCP thread.
+        Pluto.update_save_run!(session, notebook, notebook.cells; run_async=run_async, save=true)
+        _lifecycle_notify_browser(session, notebook)
+        ran = true
+    else
+        # Exit the gate without a full run; next mutation starts the workspace.
+        notebook.process_status = Pluto.ProcessStatus.ready
+        _lifecycle_notify_browser(session, notebook)
+        ran = false
+    end
 
     Dict{String,Any}(
         "notebook_id"       => string(notebook.notebook_id),
         "execution_allowed" => true,
         "already_allowed"   => false,
+        "ran"               => ran,
         "process_status"    => string(notebook.process_status),
     )
 end
@@ -470,23 +483,23 @@ function tool_open_notebook(args)
     ispath(path) || throw(ArgumentError("file_not_found::No file at '$path'"))
     run_nb = get(args, "run_notebook", false)
 
+    # SessionActions.open already queues update_save_run! when execution_allowed;
+    # do not call tool_run_all_cells again (double-run starved MCP / raced executetoken).
     nb = Pluto.SessionActions.open(sess, path; run_async = true, execution_allowed = run_nb)
 
-    if run_nb
-        # Non-blocking: blocking wait on stdio-bound sessions can starve MCP.
-        tool_run_all_cells(sess, Dict(
-            "notebook_id"         => string(nb.notebook_id),
-            "wait_for_completion" => false,
-        ))
-    end
-
-    Dict{String,Any}(
+    result = Dict{String,Any}(
         "notebook_id"         => string(nb.notebook_id),
         "path"                => nb.path,
         "execution_allowed"   => run_nb,
         "ran"                 => run_nb,
         "process_status"      => string(nb.process_status),
     )
+    if run_nb
+        result["warnings"] = String[
+            "async_execution::open queued non-blocking notebook run; poll read_cell for completion",
+        ]
+    end
+    return result
 end
 
 function tool_allow_execution(args)
@@ -496,17 +509,13 @@ function tool_allow_execution(args)
         throw(ArgumentError("invalid_notebook_id::notebook_id is required"))
     nb = _lifecycle_get_notebook!(sess, String(notebook_id))
     run_cells = get(args, "run_notebook", true)
-    result = allow_notebook_execution!(sess, nb; run_async=true)
-    if run_cells
-        # Non-blocking: blocking wait on stdio-bound sessions can starve MCP.
-        run_result = tool_run_all_cells(sess, Dict(
-            "notebook_id"         => string(nb.notebook_id),
-            "wait_for_completion" => false,
-        ))
-        result["ran"] = true
-        result["run_warnings"] = get(run_result, "warnings", String[])
-    else
-        result["ran"] = false
+    # Single path: allow_notebook_execution! already queues the run when requested.
+    # A follow-up tool_run_all_cells was a double-run footgun on the stdio thread.
+    result = allow_notebook_execution!(sess, nb; run_async=true, run_cells=run_cells)
+    if get(result, "ran", false)
+        result["run_warnings"] = String[
+            "async_execution::allow_execution queued non-blocking notebook run; poll read_cell for completion",
+        ]
     end
     result["process_status"] = string(nb.process_status)
     return result

@@ -153,7 +153,7 @@ everything else keeps working. Start `serve()` and the tools appear.
 | `start_pluto_session` | Start Pluto + MCP HTTP bridge on demand (idempotent) |
 | `stop_pluto_session` | Shut down notebooks and clear session state |
 | `open_notebook` | Load a `.jl` file server-side; safe preview by default (`run_notebook=false`) |
-| `allow_execution` | Exit safe preview on an open notebook (Glass **Run notebook code** equivalent); optional `run_notebook` (default true) |
+| `allow_execution` | Exit safe preview on an open notebook (Glass **Run notebook code** equivalent); optional `run_notebook` (default true, non-blocking; false exits gate without a full run) |
 
 ### Notebook read/write
 
@@ -165,7 +165,7 @@ everything else keeps working. Start `serve()` and the tools appear.
 | `edit_cell` | Replace a cell's code; stages by default (`run_after=false`) |
 | `edit_cells` | Batch stage `{cell_id, code}[]`; never runs |
 | `add_cell` | Insert a new cell (`after_cell_id` required when notebook is non-empty) |
-| `delete_cell` | Delete a cell (immediate reactive cleanup) |
+| `delete_cell` | Delete a cell (async reactive cleanup; non-blocking on MCP) |
 | `submit_changes` | Run all staged cells (Cmd+S semantics) |
 | `execute_cell` | Run one cell (Shift+Enter) |
 | `run_all_cells` | Re-run all cells in dependency order |

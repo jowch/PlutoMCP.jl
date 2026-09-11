@@ -136,10 +136,27 @@ function _stage_cells!(session, nb, cells)
     _notify_browser(session, nb)
 end
 
+"""
+Resolve wait_for_completion for the dispatch thread.
+
+Bound stdio sessions own Pluto in-process; a blocking wait can starve MCP and
+tear down the whole stack on client timeout. Force non-blocking there.
+"""
+function _effective_wait(wait_for_completion::Bool)
+    if wait_for_completion && is_bound_session()
+        return false, String[
+            "wait_forced_async::bound stdio session; wait_for_completion ignored to avoid MCP starvation",
+        ]
+    end
+    return wait_for_completion, String[]
+end
+
 function _run_cells!(session, nb, cells; wait_for_completion=true)
     warnings = String[]
-    Pluto.update_save_run!(session, nb, cells; run_async=!wait_for_completion, save=true)
-    if wait_for_completion
+    wait_for, force_warnings = _effective_wait(wait_for_completion)
+    append!(warnings, force_warnings)
+    Pluto.update_save_run!(session, nb, cells; run_async=!wait_for, save=true)
+    if wait_for
         completed, timed_out = _wait_cells!(cells)
         for cid in timed_out
             push!(warnings, "execution_timeout::Cell $cid did not finish within $(TOOL_TIMEOUT_SECONDS)s")
@@ -298,14 +315,16 @@ function tool_delete_cell(session, args)
     clear_pending!(nb.notebook_id, [cell.cell_id])
     clear_read_receipt!(nb.notebook_id, cell.cell_id)
 
-    # Passing no cells lets run_reactive detect the removed cell and clean up
-    Pluto.update_save_run!(session, nb, Pluto.Cell[]; run_async=false, save=true)
+    # Non-blocking: run_async=false blocked the MCP stdio thread on reactive
+    # cleanup / nbpkg (Styx #3 residual footgun after wait-default flip).
+    Pluto.update_save_run!(session, nb, Pluto.Cell[]; run_async=true, save=true)
     _notify_browser(session, nb)
 
     return _mutation_receipt(session, nb;
         applied=true,
         mutation=Dict{String,Any}("type" => "delete_cell", "cell_id" => cell_id_str),
         cell_ids_run=UUID[],
+        warnings=String["async_execution::cell deletion cleanup queued"],
         execution_status="completed",
     )
 end
@@ -371,11 +390,12 @@ end
 function tool_run_all_cells(session, args)
     nb       = _get_notebook(session, args["notebook_id"])
     wait_for = get(args, "wait_for_completion", false)
+    wait_for, force_warnings = _effective_wait(wait_for)
 
     cells = collect(nb.cells)
     cell_ids = [c.cell_id for c in cells]
     Pluto.update_save_run!(session, nb, cells; run_async=!wait_for, save=true)
-    warnings = String[]
+    warnings = copy(force_warnings)
     if wait_for
         _, timed_out = _wait_cells!(cells)
         for cid in timed_out
