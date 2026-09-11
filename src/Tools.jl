@@ -191,7 +191,8 @@ function tool_edit_cell(session, args)
     record_read!(nb.notebook_id, cell.cell_id, code)
 
     if run_after
-        warnings = _run_cells!(session, nb, [cell]; wait_for_completion=true)
+        # Non-blocking: blocking wait on stdio-bound sessions can starve MCP (#3).
+        warnings = _run_cells!(session, nb, [cell]; wait_for_completion=false)
     else
         _stage_cell!(session, nb, cell)
         warnings = String[]
@@ -269,7 +270,8 @@ function tool_add_cell(session, args)
     end
 
     if run_after
-        warnings = _run_cells!(session, nb, [new_cell]; wait_for_completion=true)
+        # Non-blocking: blocking wait on stdio-bound sessions can starve MCP (#3).
+        warnings = _run_cells!(session, nb, [new_cell]; wait_for_completion=false)
     else
         _stage_cell!(session, nb, new_cell)
         warnings = String[]
@@ -311,7 +313,7 @@ end
 function tool_execute_cell(session, args)
     nb       = _get_notebook(session, args["notebook_id"])
     cell     = _get_cell(nb, args["cell_id"])
-    wait_for = get(args, "wait_for_completion", true)
+    wait_for = get(args, "wait_for_completion", false)
 
     warnings = _run_cells!(session, nb, [cell]; wait_for_completion=wait_for)
 
@@ -325,7 +327,7 @@ end
 
 function tool_submit_changes(session, args)
     nb       = _get_notebook(session, args["notebook_id"])
-    wait_for = get(args, "wait_for_completion", true)
+    wait_for = get(args, "wait_for_completion", false)
 
     target_ids = if haskey(args, "cell_ids")
         ids = [try

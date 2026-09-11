@@ -473,9 +473,10 @@ function tool_open_notebook(args)
     nb = Pluto.SessionActions.open(sess, path; run_async = true, execution_allowed = run_nb)
 
     if run_nb
+        # Non-blocking: blocking wait on stdio-bound sessions can starve MCP.
         tool_run_all_cells(sess, Dict(
             "notebook_id"         => string(nb.notebook_id),
-            "wait_for_completion" => true,
+            "wait_for_completion" => false,
         ))
     end
 
@@ -497,9 +498,10 @@ function tool_allow_execution(args)
     run_cells = get(args, "run_notebook", true)
     result = allow_notebook_execution!(sess, nb; run_async=true)
     if run_cells
+        # Non-blocking: blocking wait on stdio-bound sessions can starve MCP.
         run_result = tool_run_all_cells(sess, Dict(
             "notebook_id"         => string(nb.notebook_id),
-            "wait_for_completion" => true,
+            "wait_for_completion" => false,
         ))
         result["ran"] = true
         result["run_warnings"] = get(run_result, "warnings", String[])

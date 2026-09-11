@@ -276,9 +276,9 @@ Returns a mutation receipt. Irreversible within the session.
 |---|---|---|---|---|
 | `notebook_id` | string | yes | — | Notebook UUID |
 | `cell_ids` | array | no | all pending | Subset of staged cell IDs to run |
-| `wait_for_completion` | boolean | no | `true` | Block until cells finish |
+| `wait_for_completion` | boolean | no | `false` | Block until cells finish (prefer false on stdio-bound sessions) |
 
-Runs staged cells and reactive dependents (Pluto Cmd+S semantics).
+Runs staged cells and reactive dependents (Pluto Cmd+S semantics). Default is non-blocking; poll `read_cell` / `read_notebook_code` for completion.
 
 #### `execute_cell`
 
@@ -286,7 +286,7 @@ Runs staged cells and reactive dependents (Pluto Cmd+S semantics).
 |---|---|---|---|---|
 | `notebook_id` | string | yes | — | Notebook UUID |
 | `cell_id` | string | yes | — | Cell UUID |
-| `wait_for_completion` | boolean | no | `true` | Block until the cell finishes |
+| `wait_for_completion` | boolean | no | `false` | Block until the cell finishes (prefer false on stdio-bound sessions) |
 
 #### `run_all_cells`
 

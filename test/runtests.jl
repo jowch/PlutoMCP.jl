@@ -150,7 +150,8 @@ end
         ))
 
         receipt = PlutoMCP.tool_submit_changes(session, Dict(
-            "notebook_id" => string(nb.notebook_id),
+            "notebook_id"         => string(nb.notebook_id),
+            "wait_for_completion" => true,
         ))
         @test receipt["applied"] == true
         @test string(cells[1].cell_id) ∈ receipt["affected_cells"]
@@ -179,9 +180,10 @@ end
             "cell_ids"    => [string(cells[2].cell_id)],
         ))
         receipt = PlutoMCP.tool_submit_changes(session, Dict(
-            "notebook_id" => string(nb.notebook_id),
-            "cell_ids"    => [string(cells[2].cell_id)],
-            "force"       => true,
+            "notebook_id"         => string(nb.notebook_id),
+            "cell_ids"            => [string(cells[2].cell_id)],
+            "force"               => true,
+            "wait_for_completion" => true,
         ))
         @test receipt["applied"] == true
         @test string(cells[2].cell_id) ∈ receipt["affected_cells"]
@@ -466,8 +468,15 @@ end
                 "run_after"   => true,
             ))
 
-            result_y2 = PlutoMCP.tool_read_cell(session,
-                Dict("notebook_id" => string(nb.notebook_id), "cell_id" => cell_y_id))
+            # run_after is non-blocking; poll until reactive output updates.
+            result_y2 = nothing
+            deadline = time() + 30.0
+            while time() < deadline
+                result_y2 = PlutoMCP.tool_read_cell(session,
+                    Dict("notebook_id" => string(nb.notebook_id), "cell_id" => cell_y_id))
+                result_y2["output"] == "70" && !result_y2["running"] && !result_y2["queued"] && break
+                sleep(0.05)
+            end
             @test result_y2["output"] == "70"
 
             Pluto.SessionActions.shutdown(session, nb; async=false, verbose=false)
@@ -530,12 +539,45 @@ end
         Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
 
         receipt = PlutoMCP.tool_execute_cell(session, Dict(
-            "notebook_id" => string(nb.notebook_id),
-            "cell_id"     => string(cells[1].cell_id),
+            "notebook_id"         => string(nb.notebook_id),
+            "cell_id"             => string(cells[1].cell_id),
+            "wait_for_completion" => true,
         ))
         @test receipt["applied"] == true
         @test receipt["execution"]["status"] == "completed"
         @test string(cells[1].cell_id) ∈ receipt["affected_cells"]
+    end
+
+    @testset "execute_cell default is non-blocking" begin
+        session, nb, cells = make_session_with_notebook("x = 1")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+
+        receipt = PlutoMCP.tool_execute_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+        ))
+        @test receipt["applied"] == true
+        @test receipt["execution"]["status"] == "running"
+        @test any(startswith(w, "async_execution::") for w in receipt["warnings"])
+    end
+
+    @testset "submit_changes default is non-blocking" begin
+        session, nb, cells = make_session_with_notebook("x = 1", "y = x")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+
+        read_cells!(session, nb, cells[1])
+        PlutoMCP.tool_edit_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "code"        => "x = 10",
+        ))
+
+        receipt = PlutoMCP.tool_submit_changes(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+        ))
+        @test receipt["applied"] == true
+        @test receipt["execution"]["status"] == "running"
+        @test any(startswith(w, "async_execution::") for w in receipt["warnings"])
     end
 
     @testset "read_notebook_code execution order" begin
