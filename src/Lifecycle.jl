@@ -65,6 +65,26 @@ function _notebook_summaries(session)
     ]
 end
 
+"""Optional laptop/client URL from Styx Ports sidecar (asExternalUri). Never invent."""
+function _optional_client_url(host_pluto_url)::Union{Nothing,String}
+    binding = session_binding()
+    binding === nothing && return nothing
+    host_pluto_url === nothing && return nothing
+    path = joinpath(dirname(binding.binding_file), "$(binding.cursor_host_pid).client.json")
+    isfile(path) || return nothing
+    try
+        data = _read_json_file(path)
+        client = get(data, "client_url", nothing)
+        host = get(data, "host_url", nothing)
+        if client isa AbstractString && !isempty(client) && host == host_pluto_url
+            return String(client)
+        end
+    catch
+        return nothing
+    end
+    nothing
+end
+
 function session_status_dict()
     sess = _STANDALONE_SESSION[]
     binding = session_binding()
@@ -90,6 +110,11 @@ function session_status_dict()
         status["pluto_url"] =
             (pluto == "running" && pluto_port !== nothing) ?
             "http://127.0.0.1:$pluto_port" : nothing
+    end
+    # Pass through sidecar only when it matches current host URL; omit key otherwise.
+    client_url = _optional_client_url(status["pluto_url"])
+    if client_url !== nothing
+        status["client_url"] = client_url
     end
     status
 end

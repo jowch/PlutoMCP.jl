@@ -1442,6 +1442,43 @@ end
         end
     end
 
+    @testset "bound: optional client_url from sidecar (omit when unset)" begin
+        PlutoMCP.stop_pluto_stack!(; close_control_bridge=true)
+        PlutoMCP.clear_session_binding_ref!()
+        runtime, binding, mcp_port = bound_runtime_setup()
+        try
+            status = PlutoMCP.start_pluto_stack!()
+            @test status["pluto"] == "running"
+            @test !haskey(status, "client_url")
+
+            host = status["pluto_url"]
+            sidecar = joinpath(dirname(binding.binding_file), "$(binding.cursor_host_pid).client.json")
+            open(sidecar, "w") do io
+                JSON.print(io, Dict(
+                    "schema_version" => 1,
+                    "host_url" => host,
+                    "client_url" => "http://127.0.0.1:59999/",
+                ))
+            end
+            with_sidecar = PlutoMCP.session_status_dict()
+            @test with_sidecar["client_url"] == "http://127.0.0.1:59999/"
+
+            # Stale sidecar (host mismatch) → omit, never invent
+            open(sidecar, "w") do io
+                JSON.print(io, Dict(
+                    "schema_version" => 1,
+                    "host_url" => "http://127.0.0.1:1",
+                    "client_url" => "http://127.0.0.1:58888/",
+                ))
+            end
+            stale = PlutoMCP.session_status_dict()
+            @test !haskey(stale, "client_url")
+        finally
+            bound_runtime_teardown!()
+            rm(runtime; recursive=true, force=true)
+        end
+    end
+
     @testset "bound: notebook path lease conflict and stale recovery" begin
         PlutoMCP.stop_pluto_stack!(; close_control_bridge=true)
         PlutoMCP.clear_session_binding_ref!()

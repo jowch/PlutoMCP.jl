@@ -8,11 +8,7 @@ All notable changes to this project are documented here.
 
 ### Added
 
-- **Bound stdio sessions:** `connect(; binding_file, runtime_dir, cursor_host_pid)` owns a loopback control bridge, mints a session nonce, and never proxies to a foreign bridge
-- **JSON `/health`:** bound mode returns `{status,session_id,mcp_port,pluto_port,pluto}`; `/call` requires `X-Styx-Session-ID`
-- **Dynamic ports:** bound mode allocates Pluto and control ports with `listenany` (no fixed `:1234`/`:2346` requirement)
-- **Notebook path leases:** host-local canonical path leases so two bound sessions cannot open the same `.jl` (`notebook_in_use`)
-- **SessionBinding module:** binding file I/O, lease acquire/release, health nonce checks
+- **Optional `client_url` on session status (Styx [#15](https://github.com/jowch/styx/issues/15)):** `session_status_dict` passes through a matching Styx Ports sidecar (`windows/<key>.client.json` from `asExternalUri`); omits the field when unset or host URL mismatched — never invents remaps
 
 ### Changed
 
