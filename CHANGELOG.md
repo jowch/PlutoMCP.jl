@@ -6,6 +6,10 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Security
+
+- **Control bridge refuses browser requests:** no more `Access-Control-Allow-Origin: *` or `OPTIONS` preflight; any request carrying an `Origin` header gets `403`. Previously a web page open in the user's browser could read the session nonce from `/health` and POST `/call` (arbitrary Julia). MCP clients never send `Origin`, so nothing else changes.
+
 ### Added
 
 - **Bound stdio sessions:** `connect(; binding_file, runtime_dir, cursor_host_pid)` owns a loopback control bridge, mints a session nonce, and never proxies to a foreign bridge

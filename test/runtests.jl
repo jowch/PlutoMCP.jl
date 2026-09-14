@@ -1335,6 +1335,41 @@ end
         end
     end
 
+    @testset "bound: no CORS, browser-origin requests refused" begin
+        PlutoMCP.stop_pluto_stack!(; close_control_bridge=true)
+        PlutoMCP.clear_session_binding_ref!()
+        runtime, binding, port = bound_runtime_setup()
+        try
+            plain = HTTP.get("http://127.0.0.1:$port/health"; readtimeout=2, connect_timeout=1)
+            @test plain.status == 200
+            @test !HTTP.hasheader(plain, "Access-Control-Allow-Origin")
+
+            preflight = HTTP.request("OPTIONS", "http://127.0.0.1:$port/call";
+                headers = ["Origin" => "https://evil.example"],
+                status_exception = false, readtimeout = 2)
+            @test preflight.status == 403
+
+            from_page = HTTP.get("http://127.0.0.1:$port/health";
+                headers = ["Origin" => "https://evil.example"],
+                status_exception = false, readtimeout = 2)
+            @test from_page.status == 403
+
+            call = HTTP.post("http://127.0.0.1:$port/call";
+                body = JSON.json(Dict("jsonrpc"=>"2.0","id"=>1,"method"=>"tools/call",
+                    "params"=>Dict("name"=>"pluto_session_status","arguments"=>Dict()))),
+                headers = [
+                    "Content-Type" => "application/json",
+                    "Origin" => "https://evil.example",
+                    PlutoMCP.STYX_SESSION_HEADER => binding.session_id,
+                ],
+                status_exception = false, readtimeout = 5)
+            @test call.status == 403
+        finally
+            bound_runtime_teardown!()
+            rm(runtime; recursive=true, force=true)
+        end
+    end
+
     @testset "bound: two concurrent control bridges" begin
         PlutoMCP.stop_pluto_stack!(; close_control_bridge=true)
         PlutoMCP.clear_session_binding_ref!()

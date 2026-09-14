@@ -110,20 +110,20 @@ function _run_http_mcp_server(pluto_session, port::Int; listenany::Bool=false)
     bound = bound_snapshot !== nothing
 
     function handler(http::HTTP.Stream)
-        # CORS on every response
-        HTTP.setheader(http, "Access-Control-Allow-Origin" => "*")
+        # Loopback control bridge, never a web API: no CORS, and any request that
+        # carries an Origin header came from a browser page (cross-site fetches and
+        # preflights always send one; MCP clients never do), so refuse it outright.
+        if HTTP.hasheader(http.message, "Origin")
+            read(http)
+            HTTP.setstatus(http, 403)
+            HTTP.startwrite(http)
+            return
+        end
 
         method = http.message.method
         target = http.message.target
 
-        if method == "OPTIONS"
-            HTTP.setheader(http, "Access-Control-Allow-Methods" => "GET, POST, OPTIONS")
-            allow = bound ? "Content-Type, $STYX_SESSION_HEADER" : "Content-Type"
-            HTTP.setheader(http, "Access-Control-Allow-Headers" => allow)
-            HTTP.setstatus(http, 200)
-            HTTP.startwrite(http)
-
-        elseif !bound && method == "GET" && startswith(target, "/sse")
+        if !bound && method == "GET" && startswith(target, "/sse")
             _handle_sse(http)
 
         elseif !bound && method == "POST" && startswith(target, "/message")
