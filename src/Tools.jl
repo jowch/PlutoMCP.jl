@@ -151,12 +151,29 @@ function _effective_wait(wait_for_completion::Bool)
     return wait_for_completion, String[]
 end
 
+# Pluto flips `cell.queued` only inside its (possibly async) run task, after
+# package sync, so a waiter polling `running || queued` can see "idle" before the
+# run has started and clear pending_run for cells that never ran. Pre-mark like
+# Pluto's own run_multiple_cells handler. Returns false when the notebook will
+# not run code at all (safe preview); pending_run must then stay set.
+function _queue_cells!(nb, cells)
+    Pluto.will_run_code(nb) || return false
+    foreach(c -> c.queued = true, cells)
+    return true
+end
+
+_blocked_warning(nb) =
+    "execution_blocked::notebook is not running code (process_status=$(nb.process_status)); pending_run kept"
+
 function _run_cells!(session, nb, cells; wait_for_completion=true)
     warnings = String[]
     wait_for, force_warnings = _effective_wait(wait_for_completion)
     append!(warnings, force_warnings)
+    will_run = _queue_cells!(nb, cells)
     Pluto.update_save_run!(session, nb, cells; run_async=!wait_for, save=true)
-    if wait_for
+    if !will_run
+        push!(warnings, _blocked_warning(nb))
+    elseif wait_for
         completed, timed_out = _wait_cells!(cells)
         for cid in timed_out
             push!(warnings, "execution_timeout::Cell $cid did not finish within $(TOOL_TIMEOUT_SECONDS)s")
@@ -394,9 +411,12 @@ function tool_run_all_cells(session, args)
 
     cells = collect(nb.cells)
     cell_ids = [c.cell_id for c in cells]
+    will_run = _queue_cells!(nb, cells)
     Pluto.update_save_run!(session, nb, cells; run_async=!wait_for, save=true)
     warnings = copy(force_warnings)
-    if wait_for
+    if !will_run
+        push!(warnings, _blocked_warning(nb))
+    elseif wait_for
         _, timed_out = _wait_cells!(cells)
         for cid in timed_out
             push!(warnings, "execution_timeout::Cell $cid did not finish within $(TOOL_TIMEOUT_SECONDS)s")

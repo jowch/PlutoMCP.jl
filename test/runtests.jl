@@ -891,6 +891,48 @@ end
         @test receipt["execution"]["status"] == "running"
     end
 
+    @testset "async run marks cells queued before returning" begin
+        session, nb, cells = make_session_with_notebook("x = 1", "y = x + 1")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+        read_cells!(session, nb, cells[1])
+        PlutoMCP.tool_edit_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "code"        => "x = 10",
+        ))
+        receipt = PlutoMCP.tool_submit_changes(session, Dict(
+            "notebook_id"         => string(nb.notebook_id),
+            "wait_for_completion" => false,
+        ))
+        # Pluto flips `queued` only inside its async run task, so the tool must
+        # pre-mark the cell or the pending_run waiter can clear it before any run.
+        @test cells[1].queued || cells[1].running
+        @test string(cells[1].cell_id) ∈ receipt["pending_run"]
+        PlutoMCP._wait_cells!(cells)
+        sleep(0.2)
+        @test isempty(PlutoMCP.pending_run_ids(nb.notebook_id))
+        @test PlutoMCP._serialize_output(cells[2]) == "11"
+    end
+
+    @testset "safe preview run keeps pending_run" begin
+        session, nb, cells = make_session_with_notebook("x = 1", "y = x + 1")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+        nb.process_status = Pluto.ProcessStatus.waiting_for_permission
+        read_cells!(session, nb, cells[1])
+        PlutoMCP.tool_edit_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "code"        => "x = 10",
+        ))
+        receipt = PlutoMCP.tool_submit_changes(session, Dict(
+            "notebook_id"         => string(nb.notebook_id),
+            "wait_for_completion" => true,
+        ))
+        @test string(cells[1].cell_id) ∈ receipt["pending_run"]
+        @test any(startswith(w, "execution_blocked::") for w in receipt["warnings"])
+        @test PlutoMCP._serialize_output(cells[2]) == "2"
+    end
+
     @testset "edit_cells is atomic on read guard failure" begin
         session, nb, cells = make_session_with_notebook("a = 1", "b = 2")
         read_cells!(session, nb, cells[1])
