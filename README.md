@@ -186,6 +186,8 @@ everything else keeps working. Start `serve()` and the tools appear.
 
 Write tools return a **mutation receipt** with `applied`, `mutation`, `cell_order`, `execution_order`, `affected_cells`, `execution.status`, `outputs.changed`, `pending_run`, and `warnings`.
 
+`execution.status` is one of `staged` (nothing ran), `running`, `completed`, `errored`, `timeout`, or `blocked`. `blocked` means the notebook is not running code (safe preview / no process): nothing ran, `pending_run` is kept, `outputs.changed` is empty, and `warnings` carries `execution_blocked::` with the remedy (`allow_execution` in safe preview).
+
 ### Tool details
 
 #### `list_notebooks`

@@ -162,8 +162,11 @@ function _queue_cells!(nb, cells)
     return true
 end
 
-_blocked_warning(nb) =
-    "execution_blocked::notebook is not running code (process_status=$(nb.process_status)); pending_run kept"
+function _blocked_warning(nb)
+    msg = "execution_blocked::notebook is not running code (process_status=$(nb.process_status)); pending_run kept"
+    nb.process_status === Pluto.ProcessStatus.waiting_for_permission ?
+        msg * "; call allow_execution to exit safe preview" : msg
+end
 
 function _run_cells!(session, nb, cells; wait_for_completion=true)
     warnings = String[]
@@ -407,29 +410,12 @@ end
 function tool_run_all_cells(session, args)
     nb       = _get_notebook(session, args["notebook_id"])
     wait_for = get(args, "wait_for_completion", false)
-    wait_for, force_warnings = _effective_wait(wait_for)
 
     cells = collect(nb.cells)
     cell_ids = [c.cell_id for c in cells]
-    will_run = _queue_cells!(nb, cells)
-    Pluto.update_save_run!(session, nb, cells; run_async=!wait_for, save=true)
-    warnings = copy(force_warnings)
-    if !will_run
-        push!(warnings, _blocked_warning(nb))
-    elseif wait_for
-        _, timed_out = _wait_cells!(cells)
-        for cid in timed_out
-            push!(warnings, "execution_timeout::Cell $cid did not finish within $(TOOL_TIMEOUT_SECONDS)s")
-        end
-        isempty(timed_out) && clear_all_pending!(nb.notebook_id)
-    else
-        @async begin
-            _, timed_out = _wait_cells!(cells)
-            isempty(timed_out) && clear_all_pending!(nb.notebook_id)
-        end
-        push!(warnings, "async_execution::cells running; pending_run clears when execution finishes")
-    end
-    _notify_browser(session, nb)
+    # Same queue/run/wait/clear path as submit_changes; every cell is a target,
+    # so per-cell clear_pending! covers the whole notebook once it completes.
+    warnings = _run_cells!(session, nb, cells; wait_for_completion=wait_for)
 
     return _mutation_receipt(session, nb;
         applied=true,

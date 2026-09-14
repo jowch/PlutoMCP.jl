@@ -930,6 +930,33 @@ end
         ))
         @test string(cells[1].cell_id) ∈ receipt["pending_run"]
         @test any(startswith(w, "execution_blocked::") for w in receipt["warnings"])
+        @test any(occursin("allow_execution", w) for w in receipt["warnings"])
+        # Nothing ran: the receipt must not report completion or pre-edit outputs.
+        @test receipt["execution"]["status"] == "blocked"
+        @test isempty(receipt["outputs"]["changed"])
+        @test PlutoMCP._serialize_output(cells[2]) == "2"
+    end
+
+    @testset "run_all_cells in safe preview keeps pending_run" begin
+        session, nb, cells = make_session_with_notebook("x = 1", "y = x + 1")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+        nb.process_status = Pluto.ProcessStatus.waiting_for_permission
+        read_cells!(session, nb, cells[1])
+        PlutoMCP.tool_edit_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "code"        => "x = 10",
+        ))
+        receipt = PlutoMCP.tool_run_all_cells(session, Dict(
+            "notebook_id"         => string(nb.notebook_id),
+            "wait_for_completion" => true,
+        ))
+        @test receipt["mutation"]["type"] == "run_all_cells"
+        @test string(cells[1].cell_id) ∈ receipt["pending_run"]
+        @test any(startswith(w, "execution_blocked::") for w in receipt["warnings"])
+        @test receipt["execution"]["status"] == "blocked"
+        @test isempty(receipt["outputs"]["changed"])
+        @test !cells[1].queued && !cells[2].queued
         @test PlutoMCP._serialize_output(cells[2]) == "2"
     end
 

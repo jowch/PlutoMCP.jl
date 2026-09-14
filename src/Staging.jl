@@ -119,6 +119,7 @@ function _receipt_output_summary(cell)
 end
 
 function _execution_status(nb, cell_ids_run; warnings=String[])
+    any(x -> startswith(x, "execution_blocked::"), warnings) && return "blocked"
     any(x -> startswith(x, "execution_timeout::"), warnings) && return "timeout"
     any(x -> startswith(x, "async_execution::"), warnings) && return "running"
     if isempty(cell_ids_run)
@@ -138,8 +139,13 @@ function _execution_status(nb, cell_ids_run; warnings=String[])
 end
 
 function _mutation_receipt(session, nb; applied, mutation, cell_ids_run=UUID[], warnings=String[], execution_status=nothing)
+    status = execution_status === nothing ?
+        _execution_status(nb, cell_ids_run; warnings) :
+        execution_status
+
+    # A blocked run touched no cell; existing outputs are not this run's result.
     outputs_changed = Dict{String,Any}[]
-    for cid in cell_ids_run
+    for cid in (status == "blocked" ? UUID[] : cell_ids_run)
         cell = get(nb.cells_dict, cid, nothing)
         cell === nothing && continue
         summary = _receipt_output_summary(cell)
@@ -152,10 +158,6 @@ function _mutation_receipt(session, nb; applied, mutation, cell_ids_run=UUID[], 
         err !== nothing && (entry["error"] = err)
         push!(outputs_changed, entry)
     end
-
-    status = execution_status === nothing ?
-        _execution_status(nb, cell_ids_run; warnings) :
-        execution_status
 
     Dict{String,Any}(
         "applied"          => applied,
