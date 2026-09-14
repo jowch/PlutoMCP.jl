@@ -335,6 +335,8 @@ The MCP transport is **HTTP/SSE** (Server-Sent Events). The bridge exposes three
 | `GET /health` | Legacy: plain `ok`. Bound: JSON `{status,session_id,mcp_port,pluto_port,pluto}` |
 | `POST /call` | JSON-RPC tools/call. Bound mode requires `X-Styx-Session-ID` |
 
+The bridge is loopback-only and not a web API: it sends no CORS headers, and any request carrying an `Origin` header or a non-loopback `Host` (a browser page, including via DNS rebinding) gets `403`.
+
 The `connect()` stdio server reads and writes newline-delimited JSON-RPC 2.0 on stdin/stdout. Legacy unbound mode may proxy to a running `serve()` bridge. Bound mode always dispatches in-process against its owned control bridge and deferred Pluto session.
 
 ---

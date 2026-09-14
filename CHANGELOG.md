@@ -8,7 +8,7 @@ All notable changes to this project are documented here.
 
 ### Security
 
-- **Control bridge refuses browser requests:** no more `Access-Control-Allow-Origin: *` or `OPTIONS` preflight; any request carrying an `Origin` header gets `403`. Previously a web page open in the user's browser could read the session nonce from `/health` and POST `/call` (arbitrary Julia). MCP clients never send `Origin`, so nothing else changes.
+- **Control bridge refuses browser requests:** no more `Access-Control-Allow-Origin: *` or `OPTIONS` preflight; any request carrying an `Origin` header, or a `Host` other than `127.0.0.1` / `localhost` / `[::1]` (DNS rebinding), gets `403` with a JSON `{"error":...}` body. Previously a web page open in the user's browser could read the session nonce from `/health` and POST `/call` (arbitrary Julia) through the bridge. MCP clients never send `Origin` and always address loopback, so nothing else changes.
 
 ### Added
 

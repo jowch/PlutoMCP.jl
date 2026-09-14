@@ -1115,6 +1115,10 @@ end
             @test PlutoMCP.tool_pluto_session_status(Dict{String,Any}())["pluto"] == "running"
             @test port_up("http://127.0.0.1:$mcp_port/health")
             @test port_up("http://127.0.0.1:$pluto_port/ping")
+            from_page = HTTP.get("http://127.0.0.1:$mcp_port/sse";
+                headers = ["Origin" => "https://evil.example"],
+                status_exception = false, readtimeout = 2)
+            @test from_page.status == 403
             PlutoMCP.stop_pluto_stack!()
             sleep(0.5)
             @test !port_up("http://127.0.0.1:$mcp_port/health")
@@ -1343,6 +1347,13 @@ end
             plain = HTTP.get("http://127.0.0.1:$port/health"; readtimeout=2, connect_timeout=1)
             @test plain.status == 200
             @test !HTTP.hasheader(plain, "Access-Control-Allow-Origin")
+            via_localhost = HTTP.get("http://localhost:$port/health"; readtimeout=2, connect_timeout=1)
+            @test via_localhost.status == 200
+
+            # OPTIONS is no longer a route, not merely refused-by-Origin.
+            options_plain = HTTP.request("OPTIONS", "http://127.0.0.1:$port/call";
+                status_exception = false, readtimeout = 2)
+            @test options_plain.status == 404
 
             preflight = HTTP.request("OPTIONS", "http://127.0.0.1:$port/call";
                 headers = ["Origin" => "https://evil.example"],
@@ -1353,6 +1364,27 @@ end
                 headers = ["Origin" => "https://evil.example"],
                 status_exception = false, readtimeout = 2)
             @test from_page.status == 403
+            @test JSON.parse(String(from_page.body), Dict{String,Any})["error"] == "browser_origin_refused"
+
+            opaque = HTTP.get("http://127.0.0.1:$port/health";
+                headers = ["origin" => "null"],
+                status_exception = false, readtimeout = 2)
+            @test opaque.status == 403
+
+            # Empty `Origin:` is still "present" (HTTP.jl's client drops empty
+            # headers, so send it raw).
+            sock = HTTP.Sockets.connect("127.0.0.1", port)
+            write(sock, "GET /health HTTP/1.1\r\nHost: 127.0.0.1:$port\r\nOrigin:\r\nConnection: close\r\n\r\n")
+            status_line = readline(sock)
+            close(sock)
+            @test occursin(" 403 ", status_line)
+
+            # DNS rebinding: same-origin GET, no Origin, foreign Host.
+            rebound = HTTP.get("http://127.0.0.1:$port/health";
+                headers = ["Host" => "attacker.example:$port"],
+                status_exception = false, readtimeout = 2)
+            @test rebound.status == 403
+            @test JSON.parse(String(rebound.body), Dict{String,Any})["error"] == "host_not_loopback"
 
             call = HTTP.post("http://127.0.0.1:$port/call";
                 body = JSON.json(Dict("jsonrpc"=>"2.0","id"=>1,"method"=>"tools/call",
