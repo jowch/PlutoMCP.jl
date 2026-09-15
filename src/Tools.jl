@@ -34,6 +34,7 @@ function _cell_to_dict(cell; notebook_id=nothing)
         "errored" => cell.errored,
         "running" => cell.running,
         "queued"  => cell.queued,
+        "code_folded" => cell.code_folded,
     )
     err = _cell_output_error(cell)
     err !== nothing && (d["error"] = err)
@@ -280,6 +281,7 @@ function tool_add_cell(session, args)
     code          = get(args, "code", "")
     after_cell_id = get(args, "after_cell_id", nothing)
     run_after     = get(args, "run_after", false)
+    folded        = get(args, "folded", false)
 
     if !isempty(nb.cell_order) && (after_cell_id === nothing || after_cell_id == "")
         throw(ArgumentError(
@@ -292,7 +294,7 @@ function tool_add_cell(session, args)
         require_fresh_read!(nb.notebook_id, anchor)
     end
 
-    new_cell = Pluto.Cell(; code=string(code))
+    new_cell = Pluto.Cell(; code=string(code), code_folded=Bool(folded))
     nb.cells_dict[new_cell.cell_id] = new_cell
     record_read!(nb.notebook_id, new_cell.cell_id, string(code))
 
@@ -427,6 +429,29 @@ function tool_run_all_cells(session, args)
     )
 end
 
+# Fold = hide the code editor, show only the output (Pluto's eye toggle).
+# Metadata only: persisted in the file's cell-order markers, no execution.
+function tool_fold_cell(session, args)
+    nb     = _get_notebook(session, args["notebook_id"])
+    cell   = _get_cell(nb, args["cell_id"])
+    folded = Bool(args["folded"])
+
+    cell.code_folded = folded
+    Pluto.save_notebook(session, nb)
+    _notify_browser(session, nb)
+
+    return _mutation_receipt(session, nb;
+        applied=true,
+        mutation=Dict{String,Any}(
+            "type"    => "fold_cell",
+            "cell_id" => string(cell.cell_id),
+            "folded"  => folded,
+        ),
+        cell_ids_run=UUID[],
+        execution_status="completed",
+    )
+end
+
 function tool_move_cell(session, args)
     nb            = _get_notebook(session, args["notebook_id"])
     cell          = _get_cell(nb, args["cell_id"])
@@ -477,6 +502,8 @@ function call_tool(session, name, arguments)
         tool_run_all_cells(session, arguments)
     elseif name == "move_cell"
         tool_move_cell(session, arguments)
+    elseif name == "fold_cell"
+        tool_fold_cell(session, arguments)
     elseif name == "resolve_pluto_context"
         tool_resolve_pluto_context(session, arguments)
     elseif name == "read_notebook_code"

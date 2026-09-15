@@ -535,6 +535,59 @@ end
         @test receipt["mutation"]["new_index"] == 1
     end
 
+    @testset "fold_cell sets code_folded and persists the file marker" begin
+        session, nb, cells = make_session_with_notebook("md\"# Title\"", "x = 1")
+        @test cells[1].code_folded == false
+        receipt = PlutoMCP.call_tool(session, "fold_cell", Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "folded"      => true,
+        ))
+        @test receipt["applied"] == true
+        @test receipt["mutation"]["type"] == "fold_cell"
+        @test receipt["mutation"]["folded"] == true
+        @test receipt["execution"]["status"] == "completed"
+        @test cells[1].code_folded == true
+        saved = read(nb.path, String)
+        @test occursin(Pluto._order_delimiter_folded * string(cells[1].cell_id), saved)
+        @test occursin(Pluto._order_delimiter * string(cells[2].cell_id), saved)
+
+        PlutoMCP.tool_fold_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "folded"      => false,
+        ))
+        @test cells[1].code_folded == false
+        @test occursin(Pluto._order_delimiter * string(cells[1].cell_id), read(nb.path, String))
+        @test any(t -> t["name"] == "fold_cell", PlutoMCP.MCP_TOOLS)
+    end
+
+    @testset "read_cell reports code_folded" begin
+        session, nb, cells = make_session_with_notebook("md\"hi\"")
+        r = PlutoMCP.tool_read_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id), "cell_id" => string(cells[1].cell_id)))
+        @test r["code_folded"] == false
+        cells[1].code_folded = true
+        r = PlutoMCP.tool_read_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id), "cell_id" => string(cells[1].cell_id)))
+        @test r["code_folded"] == true
+    end
+
+    @testset "add_cell folded=true hides the new cell's code" begin
+        session, nb, cells = make_session_with_notebook("x = 1")
+        read_cells!(session, nb, cells[1])
+        receipt = PlutoMCP.tool_add_cell(session, Dict(
+            "notebook_id"   => string(nb.notebook_id),
+            "code"          => "md\"## Section\"",
+            "after_cell_id" => string(cells[1].cell_id),
+            "folded"        => true,
+        ))
+        new_cell = nb.cells_dict[UUID(receipt["cell_id"])]
+        @test new_cell.code_folded == true
+        @test receipt["code_folded"] == true
+        @test occursin(Pluto._order_delimiter_folded * string(new_cell.cell_id), read(nb.path, String))
+    end
+
     @testset "execute_cell receipt has execution status" begin
         session, nb, cells = make_session_with_notebook("x = 1")
         Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)

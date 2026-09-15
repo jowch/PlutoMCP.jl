@@ -6,6 +6,10 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`fold_cell`** tool and **`add_cell(folded=true)`**: hide a cell's code and show only its output (Pluto's fold toggle). Metadata only, persisted in the notebook file. `read_cell` now reports `code_folded`.
+
 ### Security
 
 - **Control bridge refuses browser requests:** no more `Access-Control-Allow-Origin: *` or `OPTIONS` preflight; any request carrying an `Origin` header, or a `Host` other than `127.0.0.1` / `localhost` / `[::1]` (DNS rebinding), gets `403` with a JSON `{"error":...}` body. Previously a web page open in the user's browser could read the session nonce from `/health` and POST `/call` (arbitrary Julia) through the bridge. MCP clients never send `Origin` and always address loopback, so nothing else changes.
