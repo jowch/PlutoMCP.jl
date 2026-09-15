@@ -74,6 +74,11 @@ function _notify_browser(session, notebook)
     end
 end
 
+function _require_bool(value, name::AbstractString)
+    value isa Bool || throw(ArgumentError("invalid_argument::$name must be a boolean"))
+    return value
+end
+
 # Assign a new cell_order vector instead of mutating in place. Pluto's Firebasey
 # diff caches cell_order by reference; in-place push!/insert!/deleteat! updates
 # the cached snapshot too, so no cell_order patch reaches connected browsers.
@@ -281,7 +286,7 @@ function tool_add_cell(session, args)
     code          = get(args, "code", "")
     after_cell_id = get(args, "after_cell_id", nothing)
     run_after     = get(args, "run_after", false)
-    folded        = get(args, "folded", false)
+    folded        = _require_bool(get(args, "folded", false), "folded")
 
     if !isempty(nb.cell_order) && (after_cell_id === nothing || after_cell_id == "")
         throw(ArgumentError(
@@ -294,7 +299,7 @@ function tool_add_cell(session, args)
         require_fresh_read!(nb.notebook_id, anchor)
     end
 
-    new_cell = Pluto.Cell(; code=string(code), code_folded=Bool(folded))
+    new_cell = Pluto.Cell(; code=string(code), code_folded=folded)
     nb.cells_dict[new_cell.cell_id] = new_cell
     record_read!(nb.notebook_id, new_cell.cell_id, string(code))
 
@@ -434,7 +439,7 @@ end
 function tool_fold_cell(session, args)
     nb     = _get_notebook(session, args["notebook_id"])
     cell   = _get_cell(nb, args["cell_id"])
-    folded = Bool(args["folded"])
+    folded = _require_bool(args["folded"], "folded")
 
     cell.code_folded = folded
     Pluto.save_notebook(session, nb)

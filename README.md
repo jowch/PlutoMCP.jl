@@ -231,7 +231,8 @@ Returns a single cell object:
   "errored": false,
   "running": false,
   "queued": false,
-  "stale": false
+  "stale": false,
+  "code_folded": false
 }
 ```
 
@@ -317,7 +318,7 @@ Returns a mutation receipt with `old_index` / `new_index` in `mutation`.
 | `cell_id` | string | yes | Cell UUID |
 | `folded` | boolean | yes | `true` hides the code editor (output stays visible); `false` shows it |
 
-Metadata only: nothing runs, and the state is persisted in the notebook file's cell-order markers. `read_cell` reports the current value as `code_folded`.
+Metadata only: nothing runs, and the state is persisted in the notebook file's cell-order markers. `read_cell` reports the current value as `code_folded`. Folding a cell whose code starts with `md` (including non-markdown like `mdl = …`) can hide it from the default `read_notebook_code` projection — the same heuristic PlutoMCP already used for folded markdown.
 
 ### Error responses
 
