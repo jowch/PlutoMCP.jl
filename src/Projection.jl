@@ -17,11 +17,7 @@ function _is_fake_bind_shim(cell::Pluto.Cell)
 end
 
 function _is_markdown_cell(cell::Pluto.Cell)
-    stripped = lstrip(cell.code)
-    if startswith(stripped, "md\"\"\"") || startswith(stripped, "md\"")
-        return true
-    end
-    return cell.code_folded && startswith(stripped, "md")
+    return startswith(lstrip(cell.code), "md\"")
 end
 
 function _should_exclude_from_projection(cell::Pluto.Cell; include_markdown::Bool)

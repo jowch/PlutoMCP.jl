@@ -388,10 +388,16 @@ end
         @test "delete_cell"     ∈ names
         @test "run_all_cells"   ∈ names
         @test "move_cell"       ∈ names
+        @test "fold_cell"       ∈ names
         @test !("get_notebook_state" ∈ names)
         @test !("get_cell" ∈ names)
         @test !("set_cell_code" ∈ names)
         @test !("run_cell" ∈ names)
+
+        fold_tool = only(t for t in PlutoMCP.MCP_TOOLS if t["name"] == "fold_cell")
+        @test "folded" in fold_tool["inputSchema"]["required"]
+        add_tool = only(t for t in PlutoMCP.MCP_TOOLS if t["name"] == "add_cell")
+        @test haskey(add_tool["inputSchema"]["properties"], "folded")
     end
 
     @testset "MCP protocol: tools/call list_notebooks" begin
@@ -533,6 +539,119 @@ end
         @test receipt["cell_order"] == [string(id) for id in nb.cell_order]
         @test receipt["mutation"]["old_index"] == 3
         @test receipt["mutation"]["new_index"] == 1
+    end
+
+    @testset "fold_cell sets code_folded and persists the file marker" begin
+        session, nb, cells = make_session_with_notebook("md\"# Title\"", "x = 1")
+        @test cells[1].code_folded == false
+        receipt = PlutoMCP.call_tool(session, "fold_cell", Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "folded"      => true,
+        ))
+        @test receipt["applied"] == true
+        @test receipt["mutation"]["type"] == "fold_cell"
+        @test receipt["mutation"]["folded"] == true
+        @test receipt["execution"]["status"] == "completed"
+        @test cells[1].code_folded == true
+        saved = read(nb.path, String)
+        @test occursin(Pluto._order_delimiter_folded * string(cells[1].cell_id), saved)
+        @test occursin(Pluto._order_delimiter * string(cells[2].cell_id), saved)
+
+        PlutoMCP.tool_fold_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "folded"      => false,
+        ))
+        @test cells[1].code_folded == false
+        @test occursin(Pluto._order_delimiter * string(cells[1].cell_id), read(nb.path, String))
+    end
+
+    @testset "fold_cell rejects unknown cell_id and non-boolean folded" begin
+        session, nb, cells = make_session_with_notebook("md\"hi\"")
+        @test_throws Exception PlutoMCP.tool_fold_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => "00000000-0000-0000-0000-000000000000",
+            "folded"      => true,
+        ))
+        @test_throws ArgumentError PlutoMCP.tool_fold_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "folded"      => "true",
+        ))
+        @test_throws ArgumentError PlutoMCP.tool_fold_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "folded"      => 1,
+        ))
+        @test_throws ArgumentError PlutoMCP.tool_fold_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "folded"      => nothing,
+        ))
+        @test cells[1].code_folded == false
+    end
+
+    @testset "read_cell reports code_folded" begin
+        session, nb, cells = make_session_with_notebook("md\"hi\"")
+        r = PlutoMCP.tool_read_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id), "cell_id" => string(cells[1].cell_id)))
+        @test r["code_folded"] == false
+        cells[1].code_folded = true
+        r = PlutoMCP.tool_read_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id), "cell_id" => string(cells[1].cell_id)))
+        @test r["code_folded"] == true
+    end
+
+    @testset "add_cell folded=true hides the new cell's code" begin
+        session, nb, cells = make_session_with_notebook("x = 1")
+        read_cells!(session, nb, cells[1])
+        receipt = PlutoMCP.tool_add_cell(session, Dict(
+            "notebook_id"   => string(nb.notebook_id),
+            "code"          => "md\"## Section\"",
+            "after_cell_id" => string(cells[1].cell_id),
+            "folded"        => true,
+        ))
+        new_cell = nb.cells_dict[UUID(receipt["cell_id"])]
+        @test new_cell.code_folded == true
+        @test receipt["code_folded"] == true
+        @test occursin(Pluto._order_delimiter_folded * string(new_cell.cell_id), read(nb.path, String))
+    end
+
+    @testset "add_cell default leaves code_folded false" begin
+        session, nb, cells = make_session_with_notebook("x = 1")
+        read_cells!(session, nb, cells[1])
+        receipt = PlutoMCP.tool_add_cell(session, Dict(
+            "notebook_id"   => string(nb.notebook_id),
+            "code"          => "md\"## Section\"",
+            "after_cell_id" => string(cells[1].cell_id),
+        ))
+        new_cell = nb.cells_dict[UUID(receipt["cell_id"])]
+        @test new_cell.code_folded == false
+        @test receipt["code_folded"] == false
+        @test occursin(Pluto._order_delimiter * string(new_cell.cell_id), read(nb.path, String))
+
+        # A non-boolean is rejected before any cell is created.
+        n_before = length(nb.cell_order)
+        @test_throws ArgumentError PlutoMCP.tool_add_cell(session, Dict(
+            "notebook_id"   => string(nb.notebook_id),
+            "code"          => "z = 3",
+            "after_cell_id" => string(cells[1].cell_id),
+            "folded"        => "true",
+        ))
+        @test length(nb.cell_order) == n_before
+    end
+
+    @testset "folded non-markdown cell stays in read_notebook_code" begin
+        session, nb, cells = make_session_with_notebook("mdl = 1", "md\"# heading\"")
+        Pluto.update_dependency_cache!(nb)
+        cells[1].code_folded = true
+        cells[2].code_folded = true
+        result = PlutoMCP.tool_read_notebook_code(session,
+            Dict("notebook_id" => string(nb.notebook_id)))
+        @test string(cells[1].cell_id) ∈ result["cell_ids"]
+        @test occursin("mdl = 1", result["code"])
+        @test !(string(cells[2].cell_id) ∈ result["cell_ids"])
     end
 
     @testset "execute_cell receipt has execution status" begin

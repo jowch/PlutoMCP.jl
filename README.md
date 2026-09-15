@@ -170,6 +170,7 @@ everything else keeps working. Start `serve()` and the tools appear.
 | `execute_cell` | Run one cell (Shift+Enter) |
 | `run_all_cells` | Re-run all cells in dependency order |
 | `move_cell` | Reorder a cell relative to another |
+| `fold_cell` | Hide or show a cell's code (Pluto fold); output stays visible |
 | `get_cell_order` | Visual cell order |
 | `get_execution_order` | Dependency / execution order |
 
@@ -230,7 +231,8 @@ Returns a single cell object:
   "errored": false,
   "running": false,
   "queued": false,
-  "stale": false
+  "stale": false,
+  "code_folded": false
 }
 ```
 
@@ -262,6 +264,7 @@ Never runs cells. Call `submit_changes` to execute staged edits.
 | `code` | string | yes | — | Initial cell code |
 | `after_cell_id` | string | no* | — | Insert after this cell; required when notebook is non-empty |
 | `run_after` | boolean | no | `false` | Run the new cell after inserting |
+| `folded` | boolean | no | `false` | Hide the new cell's code (fold); use for markdown/prose cells |
 
 #### `delete_cell`
 
@@ -306,6 +309,16 @@ Runs staged cells and reactive dependents (Pluto Cmd+S semantics). Default is no
 | `after_cell_id` | string | yes | Move after this cell UUID; pass `""` to move to the top |
 
 Returns a mutation receipt with `old_index` / `new_index` in `mutation`.
+
+#### `fold_cell`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `notebook_id` | string | yes | Notebook UUID |
+| `cell_id` | string | yes | Cell UUID |
+| `folded` | boolean | yes | `true` hides the code editor (output stays visible); `false` shows it |
+
+Metadata only: nothing runs, and the state is persisted in the notebook file's cell-order markers. `read_cell` reports the current value as `code_folded`.
 
 ### Error responses
 

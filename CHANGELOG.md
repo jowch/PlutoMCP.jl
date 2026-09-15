@@ -12,10 +12,12 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- **`read_notebook_code` hid folded non-markdown cells:** the markdown heuristic treated any folded cell whose code starts with `md` (e.g. `mdl = fit(...)`) as prose and dropped it from the default projection. Only `md"..."` / `md"""..."""` cells count as markdown now.
 - **`pending_run` cleared before cells ran:** run tools now mark cells `queued` before handing them to Pluto (as Pluto's own run handler does), so the async waiter cannot observe an idle cell and clear `pending_run`/`stale_cell_ids` before execution started. In safe preview (`waiting_for_permission`) nothing runs, so `pending_run` is kept and the receipt reports `execution.status = "blocked"` with an empty `outputs.changed` and an `execution_blocked::` warning naming the remedy (`allow_execution`) instead of reporting `completed`. `run_all_cells` now shares this path with `submit_changes`, and both drop `pending_run` ids for cells that no longer exist (removed by Pluto's file hot-reload or the browser UI) instead of `submit_changes` throwing `cell_not_found` on every call.
 
 ### Added
 
+- **`fold_cell`** tool and **`add_cell(folded=true)`**: hide a cell's code and show only its output (Pluto's fold toggle). Metadata only, persisted in the notebook file. `read_cell` now reports `code_folded`.
 - **Bound stdio sessions:** `connect(; binding_file, runtime_dir, cursor_host_pid)` owns a loopback control bridge, mints a session nonce, and never proxies to a foreign bridge
 - **JSON `/health`:** bound mode returns `{status,session_id,mcp_port,pluto_port,pluto}`; `/call` requires `X-Styx-Session-ID`
 - **Dynamic ports:** bound mode allocates Pluto and control ports with `listenany` (no fixed `:1234`/`:2346` requirement)
