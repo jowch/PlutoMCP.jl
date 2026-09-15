@@ -79,7 +79,7 @@ const MCP_TOOLS = [
                 "code"          => Dict("type" => "string", "description" => "Initial cell code."),
                 "after_cell_id" => Dict("type" => "string", "description" => "Insert after this cell UUID; required when notebook is non-empty."),
                 "run_after"     => Dict("type" => "boolean", "description" => "Run the new cell after inserting (non-blocking). Default: false."),
-                "folded"        => Dict("type" => "boolean", "description" => "Hide the new cell's code, showing only its output (Pluto fold). Use for markdown/prose cells. Default: false. Folded cells whose code starts with md are omitted from the default read_notebook_code projection."),
+                "folded"        => Dict("type" => "boolean", "description" => "Hide the new cell's code, showing only its output (Pluto fold). Use for markdown/prose cells. Default: false."),
             ),
             "required" => ["notebook_id", "code"],
         ),
@@ -154,7 +154,7 @@ const MCP_TOOLS = [
     ),
     Dict{String,Any}(
         "name"        => "fold_cell",
-        "description" => "Fold or unfold a cell: folded hides the code editor and shows only the output (Pluto's eye toggle). Metadata only; nothing runs. Persisted in the notebook file. Folding a cell whose code starts with md can hide it from the default read_notebook_code projection.",
+        "description" => "Fold or unfold a cell: folded hides the code editor and shows only the output (Pluto's eye toggle). Metadata only; nothing runs. Persisted in the notebook file.",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(

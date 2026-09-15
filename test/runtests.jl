@@ -584,6 +584,12 @@ end
             "cell_id"     => string(cells[1].cell_id),
             "folded"      => 1,
         ))
+        @test_throws ArgumentError PlutoMCP.tool_fold_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "folded"      => nothing,
+        ))
+        @test cells[1].code_folded == false
     end
 
     @testset "read_cell reports code_folded" begin
@@ -624,6 +630,28 @@ end
         @test new_cell.code_folded == false
         @test receipt["code_folded"] == false
         @test occursin(Pluto._order_delimiter * string(new_cell.cell_id), read(nb.path, String))
+
+        # A non-boolean is rejected before any cell is created.
+        n_before = length(nb.cell_order)
+        @test_throws ArgumentError PlutoMCP.tool_add_cell(session, Dict(
+            "notebook_id"   => string(nb.notebook_id),
+            "code"          => "z = 3",
+            "after_cell_id" => string(cells[1].cell_id),
+            "folded"        => "true",
+        ))
+        @test length(nb.cell_order) == n_before
+    end
+
+    @testset "folded non-markdown cell stays in read_notebook_code" begin
+        session, nb, cells = make_session_with_notebook("mdl = 1", "md\"# heading\"")
+        Pluto.update_dependency_cache!(nb)
+        cells[1].code_folded = true
+        cells[2].code_folded = true
+        result = PlutoMCP.tool_read_notebook_code(session,
+            Dict("notebook_id" => string(nb.notebook_id)))
+        @test string(cells[1].cell_id) ∈ result["cell_ids"]
+        @test occursin("mdl = 1", result["code"])
+        @test !(string(cells[2].cell_id) ∈ result["cell_ids"])
     end
 
     @testset "execute_cell receipt has execution status" begin
