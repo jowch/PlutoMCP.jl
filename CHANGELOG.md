@@ -10,6 +10,10 @@ All notable changes to this project are documented here.
 
 - **Control bridge refuses browser requests:** no more `Access-Control-Allow-Origin: *` or `OPTIONS` preflight; any request carrying an `Origin` header, or a `Host` other than `127.0.0.1` / `localhost` / `[::1]` (DNS rebinding), gets `403` with a JSON `{"error":...}` body. Previously a web page open in the user's browser could read the session nonce from `/health` and POST `/call` (arbitrary Julia) through the bridge. MCP clients never send `Origin` and always address loopback, so nothing else changes.
 
+### Fixed
+
+- **`pending_run` cleared before cells ran:** run tools now mark cells `queued` before handing them to Pluto (as Pluto's own run handler does), so the async waiter cannot observe an idle cell and clear `pending_run`/`stale_cell_ids` before execution started. In safe preview (`waiting_for_permission`) nothing runs, so `pending_run` is kept and the receipt reports `execution.status = "blocked"` with an empty `outputs.changed` and an `execution_blocked::` warning naming the remedy (`allow_execution`) instead of reporting `completed`. `run_all_cells` now shares this path with `submit_changes`, and both drop `pending_run` ids for cells that no longer exist (removed by Pluto's file hot-reload or the browser UI) instead of `submit_changes` throwing `cell_not_found` on every call.
+
 ### Added
 
 - **Bound stdio sessions:** `connect(; binding_file, runtime_dir, cursor_host_pid)` owns a loopback control bridge, mints a session nonce, and never proxies to a foreign bridge

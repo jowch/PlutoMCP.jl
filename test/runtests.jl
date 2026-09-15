@@ -891,6 +891,136 @@ end
         @test receipt["execution"]["status"] == "running"
     end
 
+    @testset "async run marks cells queued before returning" begin
+        session, nb, cells = make_session_with_notebook("x = 1", "y = x + 1")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+        read_cells!(session, nb, cells[1])
+        PlutoMCP.tool_edit_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "code"        => "x = 10",
+        ))
+        receipt = PlutoMCP.tool_submit_changes(session, Dict(
+            "notebook_id"         => string(nb.notebook_id),
+            "wait_for_completion" => false,
+        ))
+        # Pluto flips `queued` only inside its async run task, so the tool must
+        # pre-mark the cell or the pending_run waiter can clear it before any run.
+        @test cells[1].queued || cells[1].running
+        @test string(cells[1].cell_id) ∈ receipt["pending_run"]
+        PlutoMCP._wait_cells!(cells)
+        sleep(0.2)
+        @test isempty(PlutoMCP.pending_run_ids(nb.notebook_id))
+        @test PlutoMCP._serialize_output(cells[2]) == "11"
+    end
+
+    @testset "safe preview run keeps pending_run" begin
+        session, nb, cells = make_session_with_notebook("x = 1", "y = x + 1")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+        nb.process_status = Pluto.ProcessStatus.waiting_for_permission
+        read_cells!(session, nb, cells[1])
+        PlutoMCP.tool_edit_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "code"        => "x = 10",
+        ))
+        receipt = PlutoMCP.tool_submit_changes(session, Dict(
+            "notebook_id"         => string(nb.notebook_id),
+            "wait_for_completion" => true,
+        ))
+        @test string(cells[1].cell_id) ∈ receipt["pending_run"]
+        @test any(startswith(w, "execution_blocked::") for w in receipt["warnings"])
+        @test any(occursin("allow_execution", w) for w in receipt["warnings"])
+        # Nothing ran: the receipt must not report completion or pre-edit outputs.
+        @test receipt["execution"]["status"] == "blocked"
+        @test isempty(receipt["outputs"]["changed"])
+        @test PlutoMCP._serialize_output(cells[2]) == "2"
+    end
+
+    @testset "run_all_cells in safe preview keeps pending_run" begin
+        session, nb, cells = make_session_with_notebook("x = 1", "y = x + 1")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+        nb.process_status = Pluto.ProcessStatus.waiting_for_permission
+        read_cells!(session, nb, cells[1])
+        PlutoMCP.tool_edit_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "code"        => "x = 10",
+        ))
+        receipt = PlutoMCP.tool_run_all_cells(session, Dict(
+            "notebook_id"         => string(nb.notebook_id),
+            "wait_for_completion" => true,
+        ))
+        @test receipt["mutation"]["type"] == "run_all_cells"
+        @test string(cells[1].cell_id) ∈ receipt["pending_run"]
+        @test any(startswith(w, "execution_blocked::") for w in receipt["warnings"])
+        @test receipt["execution"]["status"] == "blocked"
+        @test isempty(receipt["outputs"]["changed"])
+        @test !cells[1].queued && !cells[2].queued
+        @test PlutoMCP._serialize_output(cells[2]) == "2"
+    end
+
+    @testset "run_all_cells clears orphan pending ids" begin
+        session, nb, cells = make_session_with_notebook("x = 1", "y = 2")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+        read_cells!(session, nb, cells[1])
+        PlutoMCP.tool_edit_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "code"        => "x = 10",
+        ))
+        @test cells[1].cell_id ∈ PlutoMCP.pending_run_ids(nb.notebook_id)
+        # Remove the staged cell the way Pluto's file hot-reload and the browser
+        # delete do: straight out of cells_dict / cell_order, bypassing delete_cell.
+        delete!(nb.cells_dict, cells[1].cell_id)
+        nb.cell_order = filter(!=(cells[1].cell_id), nb.cell_order)
+
+        receipt = PlutoMCP.tool_run_all_cells(session, Dict(
+            "notebook_id"         => string(nb.notebook_id),
+            "wait_for_completion" => true,
+        ))
+        @test isempty(receipt["pending_run"])
+        @test isempty(PlutoMCP.pending_run_ids(nb.notebook_id))
+        receipt = PlutoMCP.tool_submit_changes(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+        ))
+        @test receipt["applied"] == true
+        @test isempty(receipt["pending_run"])
+    end
+
+    @testset "submit_changes prunes orphan pending ids instead of throwing" begin
+        session, nb, cells = make_session_with_notebook("x = 1", "y = 2")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+        read_cells!(session, nb, cells[1], cells[2])
+        PlutoMCP.tool_edit_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[1].cell_id),
+            "code"        => "x = 10",
+        ))
+        PlutoMCP.tool_edit_cell(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_id"     => string(cells[2].cell_id),
+            "code"        => "y = 20",
+        ))
+        delete!(nb.cells_dict, cells[1].cell_id)
+        nb.cell_order = filter(!=(cells[1].cell_id), nb.cell_order)
+
+        receipt = PlutoMCP.tool_submit_changes(session, Dict(
+            "notebook_id"         => string(nb.notebook_id),
+            "wait_for_completion" => true,
+        ))
+        @test receipt["applied"] == true
+        # The surviving staged cell still runs; the ghost id is dropped, not run.
+        @test receipt["affected_cells"] == [string(cells[2].cell_id)]
+        @test isempty(receipt["pending_run"])
+        @test PlutoMCP._serialize_output(cells[2]) == "20"
+        # An explicitly named ghost id is still an error, not silently ignored.
+        @test_throws ArgumentError PlutoMCP.tool_submit_changes(session, Dict(
+            "notebook_id" => string(nb.notebook_id),
+            "cell_ids"    => [string(cells[1].cell_id)],
+        ))
+    end
+
     @testset "edit_cells is atomic on read guard failure" begin
         session, nb, cells = make_session_with_notebook("a = 1", "b = 2")
         read_cells!(session, nb, cells[1])
