@@ -104,26 +104,48 @@ end
 # HTTP/SSE MCP server
 # ---------------------------------------------------------------------------
 
+# `Host` as clients send it: `127.0.0.1:2346`, `localhost`, `[::1]:2346`.
+function _loopback_host(host::AbstractString)
+    name = if startswith(host, '[')
+        i = findfirst(']', host)
+        i === nothing ? "" : host[1:i]
+    else
+        first(split(host, ':'; limit=2))
+    end
+    return name == "127.0.0.1" || name == "localhost" || name == "[::1]"
+end
+
+function _refuse(http::HTTP.Stream, code::AbstractString)
+    read(http)
+    HTTP.setstatus(http, 403)
+    HTTP.setheader(http, "Content-Type" => "application/json")
+    HTTP.startwrite(http)
+    write(http, """{"error":"$code"}""")
+end
+
 function _run_http_mcp_server(pluto_session, port::Int; listenany::Bool=false)
     # Capture identity at bind time so /health never follows a later global swap.
     bound_snapshot = session_binding()
     bound = bound_snapshot !== nothing
 
     function handler(http::HTTP.Stream)
-        # CORS on every response
-        HTTP.setheader(http, "Access-Control-Allow-Origin" => "*")
+        # Loopback control bridge, never a web API: no CORS, and any request that
+        # carries an Origin header came from a browser page (cross-site fetches and
+        # preflights always send one; MCP clients never do), so refuse it outright.
+        # A DNS-rebinding page sends a same-origin GET with no Origin but a foreign
+        # Host, so Host must name loopback too.
+        if HTTP.header(http.message, "Origin", nothing) !== nothing
+            _refuse(http, "browser_origin_refused")
+            return
+        elseif !_loopback_host(HTTP.header(http.message, "Host", ""))
+            _refuse(http, "host_not_loopback")
+            return
+        end
 
         method = http.message.method
         target = http.message.target
 
-        if method == "OPTIONS"
-            HTTP.setheader(http, "Access-Control-Allow-Methods" => "GET, POST, OPTIONS")
-            allow = bound ? "Content-Type, $STYX_SESSION_HEADER" : "Content-Type"
-            HTTP.setheader(http, "Access-Control-Allow-Headers" => allow)
-            HTTP.setstatus(http, 200)
-            HTTP.startwrite(http)
-
-        elseif !bound && method == "GET" && startswith(target, "/sse")
+        if !bound && method == "GET" && startswith(target, "/sse")
             _handle_sse(http)
 
         elseif !bound && method == "POST" && startswith(target, "/message")
