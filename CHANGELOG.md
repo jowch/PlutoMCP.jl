@@ -12,7 +12,7 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
-- **`pending_run` cleared before cells ran:** run tools now mark cells `queued` before handing them to Pluto (as Pluto's own run handler does), so the async waiter cannot observe an idle cell and clear `pending_run`/`stale_cell_ids` before execution started. In safe preview (`waiting_for_permission`) nothing runs, so `pending_run` is kept and the receipt reports `execution.status = "blocked"` with an empty `outputs.changed` and an `execution_blocked::` warning naming the remedy (`allow_execution`) instead of reporting `completed`. `run_all_cells` now shares this path with `submit_changes`.
+- **`pending_run` cleared before cells ran:** run tools now mark cells `queued` before handing them to Pluto (as Pluto's own run handler does), so the async waiter cannot observe an idle cell and clear `pending_run`/`stale_cell_ids` before execution started. In safe preview (`waiting_for_permission`) nothing runs, so `pending_run` is kept and the receipt reports `execution.status = "blocked"` with an empty `outputs.changed` and an `execution_blocked::` warning naming the remedy (`allow_execution`) instead of reporting `completed`. `run_all_cells` now shares this path with `submit_changes`, and both drop `pending_run` ids for cells that no longer exist (removed by Pluto's file hot-reload or the browser UI) instead of `submit_changes` throwing `cell_not_found` on every call.
 
 ### Added
 

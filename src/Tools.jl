@@ -169,6 +169,7 @@ function _blocked_warning(nb)
 end
 
 function _run_cells!(session, nb, cells; wait_for_completion=true)
+    prune_orphan_pending!(nb)
     warnings = String[]
     wait_for, force_warnings = _effective_wait(wait_for_completion)
     append!(warnings, force_warnings)
@@ -367,6 +368,7 @@ end
 function tool_submit_changes(session, args)
     nb       = _get_notebook(session, args["notebook_id"])
     wait_for = get(args, "wait_for_completion", false)
+    prune_orphan_pending!(nb)
 
     target_ids = if haskey(args, "cell_ids")
         ids = [try

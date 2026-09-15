@@ -42,6 +42,20 @@ function clear_all_pending!(notebook_id::UUID)
     return nothing
 end
 
+# Drop pending ids for cells no longer in the notebook. Pluto's file hot-reload
+# (update_from_file) and the browser delete remove cells straight from
+# cells_dict, bypassing delete_cell's clear_pending!, and a ghost id would
+# otherwise make submit_changes throw cell_not_found on every call.
+function prune_orphan_pending!(nb::Pluto.Notebook)
+    _with_staging_lock() do
+        pending = get(_pending_run, nb.notebook_id, nothing)
+        pending === nothing && return nothing
+        filter!(cid -> haskey(nb.cells_dict, cid), pending)
+        isempty(pending) && delete!(_pending_run, nb.notebook_id)
+    end
+    return nothing
+end
+
 function clear_notebook_staging!(notebook_id::UUID)
     _with_staging_lock() do
         delete!(_pending_run, notebook_id)
