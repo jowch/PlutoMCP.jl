@@ -5,6 +5,7 @@ const LIFECYCLE_TOOLS = Set([
     "start_pluto_session",
     "stop_pluto_session",
     "open_notebook",
+    "new_notebook",
     "allow_execution",
 ])
 
@@ -502,6 +503,30 @@ function tool_open_notebook(args)
     return result
 end
 
+function tool_new_notebook(args)
+    require_standalone_session!()
+    requested = get(args, "path", nothing)
+    nb = if requested === nothing
+        # Pluto's own naming in its new-notebooks directory, like "Create a new notebook".
+        Pluto.emptynotebook()
+    else
+        path = abspath(expanduser(String(requested)))
+        endswith(path, ".jl") ||
+            throw(ArgumentError("invalid_path::Notebook path must end in .jl: '$path'"))
+        ispath(path) &&
+            throw(ArgumentError("file_exists::'$path' already exists; use open_notebook to load it"))
+        isdir(dirname(path)) ||
+            throw(ArgumentError("invalid_path::Directory does not exist: '$(dirname(path))'"))
+        Pluto.emptynotebook(path)
+    end
+    # Pluto serializes the file (never a hand-written header), then the normal open
+    # path loads it: same safe preview and bound-mode path leases as open_notebook.
+    Pluto.save_notebook(nb, nb.path)
+    result = tool_open_notebook(Dict{String,Any}("path" => nb.path))
+    result["created"] = true
+    return result
+end
+
 function tool_allow_execution(args)
     sess = require_standalone_session!()
     notebook_id = get(args, "notebook_id", nothing)
@@ -530,6 +555,8 @@ function call_lifecycle_tool(name::AbstractString, arguments)
         tool_stop_pluto_session(arguments)
     elseif name == "open_notebook"
         tool_open_notebook(arguments)
+    elseif name == "new_notebook"
+        tool_new_notebook(arguments)
     elseif name == "allow_execution"
         tool_allow_execution(arguments)
     else

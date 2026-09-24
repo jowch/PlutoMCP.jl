@@ -18,6 +18,8 @@ All notable changes to this project are documented here.
 ### Added
 
 - **`view_cell_output`** tool: returns a cell's output as a PNG image content block, so agents can see plots and figures. Pluto shows plots as SVG, so the tool asks the notebook's worker to re-render the cell's value as `image/png` (PNG outputs pass through without a worker). `read_cell` points at it for PNG/SVG outputs. Needs a running notebook (not safe preview) for anything but PNG outputs.
+- **`list_notebooks` run state:** each notebook now reports `pending_run` (staged, unrun cell ids), `running` (queued or running cell ids) and `execution_allowed` (`Pluto.will_run_code`). Listing records no read receipts, so it does not satisfy read-before-edit.
+- **`new_notebook`** tool: creates an empty notebook (Pluto's own serialization via `emptynotebook` + `save_notebook`), at an optional `.jl` `path` or in Pluto's new-notebooks directory, then loads it through `open_notebook` (same safe preview and bound-mode path leases). Refuses existing paths (`file_exists`), non-`.jl` paths, and missing directories (`invalid_path`).
 - **`fold_cell`** tool and **`add_cell(folded=true)`**: hide a cell's code and show only its output (Pluto's fold toggle). Metadata only, persisted in the notebook file. `read_cell` now reports `code_folded`.
 - **Bound stdio sessions:** `connect(; binding_file, runtime_dir, cursor_host_pid)` owns a loopback control bridge, mints a session nonce, and never proxies to a foreign bridge
 - **JSON `/health`:** bound mode returns `{status,session_id,mcp_port,pluto_port,pluto}`; `/call` requires `X-Styx-Session-ID`

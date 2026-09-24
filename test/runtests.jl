@@ -43,6 +43,37 @@ end
         @test length(result) == 1
         @test result[1]["notebook_id"] == string(nb.notebook_id)
         @test result[1]["cell_count"] == 1
+        @test result[1]["pending_run"] == String[]
+        @test result[1]["running"] == String[]
+        @test result[1]["execution_allowed"] isa Bool
+    end
+
+    @testset "list_notebooks reports pending_run without read receipts" begin
+        session, nb, cells = make_session_with_notebook("y = 2")
+        PlutoMCP.mark_pending!(nb.notebook_id, cells[1].cell_id)
+        result = PlutoMCP.tool_list_notebooks(session, Dict())
+        @test result[1]["pending_run"] == [string(cells[1].cell_id)]
+        # Listing must not satisfy read-before-edit.
+        @test_throws ArgumentError PlutoMCP.require_fresh_read!(nb.notebook_id, cells[1])
+    end
+
+    @testset "list_notebooks reports running cells" begin
+        session, nb, cells = make_session_with_notebook("a = 1", "b = 2")
+        cells[2].queued = true
+        result = PlutoMCP.tool_list_notebooks(session, Dict())
+        @test result[1]["running"] == [string(cells[2].cell_id)]
+        cells[2].queued = false
+        cells[1].running = true
+        result = PlutoMCP.tool_list_notebooks(session, Dict())
+        @test result[1]["running"] == [string(cells[1].cell_id)]
+    end
+
+    @testset "list_notebooks reports execution_allowed=false in safe preview" begin
+        session, nb, cells = make_session_with_notebook("z = 3")
+        nb.process_status = Pluto.ProcessStatus.ready
+        @test PlutoMCP.tool_list_notebooks(session, Dict())[1]["execution_allowed"] == true
+        nb.process_status = Pluto.ProcessStatus.waiting_for_permission
+        @test PlutoMCP.tool_list_notebooks(session, Dict())[1]["execution_allowed"] == false
     end
 
     @testset "read_cell" begin
@@ -1273,6 +1304,35 @@ end
         end
     end
 
+    @testset "lifecycle: new_notebook creates and loads a Pluto-written file" begin
+        PlutoMCP.stop_pluto_stack!()
+        session = Pluto.ServerSession()
+        PlutoMCP.bind_standalone_session!(session)
+        dir = mktempdir()
+        try
+            path = joinpath(dir, "fresh.jl")
+            result = PlutoMCP.tool_new_notebook(Dict{String,Any}("path" => path))
+            @test result["created"] == true
+            @test result["path"] == path
+            @test result["execution_allowed"] == false
+            @test isfile(path)
+            @test startswith(read(path, String), "### A Pluto.jl notebook ###")
+            @test haskey(session.notebooks, UUID(result["notebook_id"]))
+
+            # Never clobber, and reject non-notebook paths.
+            @test_throws ArgumentError PlutoMCP.tool_new_notebook(Dict{String,Any}("path" => path))
+            @test_throws ArgumentError PlutoMCP.tool_new_notebook(Dict{String,Any}("path" => joinpath(dir, "x.txt")))
+            @test_throws ArgumentError PlutoMCP.tool_new_notebook(Dict{String,Any}("path" => joinpath(dir, "missing", "y.jl")))
+
+            default = PlutoMCP.tool_new_notebook(Dict{String,Any}())
+            @test isfile(default["path"])
+            @test haskey(session.notebooks, UUID(default["notebook_id"]))
+            rm(default["path"]; force=true)
+        finally
+            PlutoMCP.stop_pluto_stack!()
+        end
+    end
+
     @testset "lifecycle: allow_execution exits safe preview" begin
         PlutoMCP.stop_pluto_stack!()
         fixture = joinpath(@__DIR__, "fixtures", "test_notebook.jl")
@@ -1458,6 +1518,7 @@ end
         @test "start_pluto_session" ∈ names
         @test "stop_pluto_session"  ∈ names
         @test "open_notebook"       ∈ names
+        @test "new_notebook"        ∈ names
         @test "allow_execution"     ∈ names
     end
 
