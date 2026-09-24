@@ -153,6 +153,7 @@ everything else keeps working. Start `serve()` and the tools appear.
 | `start_pluto_session` | Start Pluto + MCP HTTP bridge on demand (idempotent) |
 | `stop_pluto_session` | Shut down notebooks and clear session state |
 | `open_notebook` | Load a `.jl` file server-side; safe preview by default (`run_notebook=false`) |
+| `new_notebook` | Create an empty notebook file (Pluto-serialized, never overwrites) and load it in safe preview; optional `path` |
 | `allow_execution` | Exit safe preview on an open notebook (Glass **Run notebook code** equivalent); optional `run_notebook` (default true, non-blocking; false exits gate without a full run) |
 
 ### Notebook read/write
@@ -200,10 +201,19 @@ No inputs. Returns an array of notebook objects:
   {
     "notebook_id": "abc123",
     "path": "/home/user/analysis.jl",
-    "cell_count": 12
+    "cell_count": 12,
+    "pending_run": ["5f1c…"],
+    "running": [],
+    "execution_allowed": true
   }
 ]
 ```
+
+- `pending_run` — ids of cells edited (staged) but not yet run.
+- `running` — ids of cells currently queued or running, in notebook order.
+- `execution_allowed` — whether Pluto will run code now (`false` in safe preview, and while the notebook process is stopped, restarting, or crashed).
+
+Listing does not record read receipts, so it never satisfies read-before-edit; a host can call it (e.g. at the end of an agent turn) to check run state.
 
 #### `read_notebook_code`
 

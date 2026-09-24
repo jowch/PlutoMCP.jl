@@ -13,7 +13,7 @@ end
 const MCP_TOOLS = [
     Dict{String,Any}(
         "name"        => "list_notebooks",
-        "description" => "List all notebooks currently open in the Pluto session.",
+        "description" => "List all notebooks currently open in the Pluto session, with each one's run state: pending_run (ids of edited cells not yet run), running (ids of cells queued or running, in notebook order), and execution_allowed (whether Pluto will run code now: false in safe preview, and while the notebook process is stopped, restarting, or crashed). Does not count as reading any cell.",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(),
@@ -342,6 +342,17 @@ const MCP_TOOLS = [
                 "run_notebook"  => Dict("type" => "boolean", "description" => "Queue a non-blocking full run after open. Default: false (safe preview)."),
             ),
             "required" => ["path"],
+        ),
+    ),
+    Dict{String,Any}(
+        "name"        => "new_notebook",
+        "description" => "Create a new empty notebook file (written by Pluto itself) and load it into the live Pluto session in safe preview. Use this instead of writing a .jl file by hand. Omit path to use Pluto's default new-notebook location; an existing file is never overwritten (use open_notebook for that).",
+        "inputSchema" => Dict{String,Any}(
+            "type"       => "object",
+            "properties" => Dict{String,Any}(
+                "path" => Dict("type" => "string", "description" => "Optional filesystem path for the new .jl file. Must not exist yet; its directory must."),
+            ),
+            "required"   => String[],
         ),
     ),
     Dict{String,Any}(
