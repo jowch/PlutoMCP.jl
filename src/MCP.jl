@@ -33,6 +33,18 @@ const MCP_TOOLS = [
         ),
     ),
     Dict{String,Any}(
+        "name"        => "view_cell_output",
+        "description" => "See a cell's output as an image (PNG): plots, figures, rendered images. Use to check what a visual output actually looks like; read_cell only describes non-text outputs. Needs the notebook to be running code (not safe preview) unless the output already is a PNG, and waits while the notebook's worker is busy running cells. Outputs with no PNG form (Markdown, HTML, text) fail with no_image; use read_cell for those.",
+        "inputSchema" => Dict{String,Any}(
+            "type"       => "object",
+            "properties" => Dict{String,Any}(
+                "notebook_id" => Dict("type" => "string", "description" => "The notebook UUID."),
+                "cell_id"     => Dict("type" => "string", "description" => "The cell UUID."),
+            ),
+            "required" => ["notebook_id", "cell_id"],
+        ),
+    ),
+    Dict{String,Any}(
         "name"        => "edit_cell",
         "description" => "Replace the code in a cell. Requires a prior read_cell or read_notebook_code on this cell. Stages the edit by default (run_after=false); call submit_changes to run staged cells. After a successful edit, the server records a read receipt for the new code (satisfies read guard for your own staged edits only).",
         "inputSchema" => Dict{String,Any}(
@@ -406,10 +418,15 @@ _err(id, code, message) = Dict{String,Any}(
 
 function _handle_tool_call(session, name, arguments)
     result = call_tool_with_session(session, name, arguments)
-    Dict{String,Any}(
-        "content" => [Dict{String,Any}("type" => "text", "text" => JSON.json(result))],
-        "isError" => false,
-    )
+    content = if result isa CellImage
+        [
+            Dict{String,Any}("type" => "text", "text" => JSON.json(result.meta)),
+            Dict{String,Any}("type" => "image", "data" => base64encode(result.png), "mimeType" => "image/png"),
+        ]
+    else
+        [Dict{String,Any}("type" => "text", "text" => JSON.json(result))]
+    end
+    Dict{String,Any}("content" => content, "isError" => false)
 end
 
 function _safe_handle_tool_call(session, name, arguments)
