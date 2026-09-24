@@ -56,6 +56,25 @@ end
         @test_throws ArgumentError PlutoMCP.require_fresh_read!(nb.notebook_id, cells[1])
     end
 
+    @testset "list_notebooks reports running cells" begin
+        session, nb, cells = make_session_with_notebook("a = 1", "b = 2")
+        cells[2].queued = true
+        result = PlutoMCP.tool_list_notebooks(session, Dict())
+        @test result[1]["running"] == [string(cells[2].cell_id)]
+        cells[2].queued = false
+        cells[1].running = true
+        result = PlutoMCP.tool_list_notebooks(session, Dict())
+        @test result[1]["running"] == [string(cells[1].cell_id)]
+    end
+
+    @testset "list_notebooks reports execution_allowed=false in safe preview" begin
+        session, nb, cells = make_session_with_notebook("z = 3")
+        nb.process_status = Pluto.ProcessStatus.ready
+        @test PlutoMCP.tool_list_notebooks(session, Dict())[1]["execution_allowed"] == true
+        nb.process_status = Pluto.ProcessStatus.waiting_for_permission
+        @test PlutoMCP.tool_list_notebooks(session, Dict())[1]["execution_allowed"] == false
+    end
+
     @testset "read_cell" begin
         session, nb, cells = make_session_with_notebook("z = 99")
         args   = Dict("notebook_id" => string(nb.notebook_id), "cell_id" => string(cells[1].cell_id))

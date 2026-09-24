@@ -201,10 +201,19 @@ No inputs. Returns an array of notebook objects:
   {
     "notebook_id": "abc123",
     "path": "/home/user/analysis.jl",
-    "cell_count": 12
+    "cell_count": 12,
+    "pending_run": ["5f1c…"],
+    "running": [],
+    "execution_allowed": true
   }
 ]
 ```
+
+- `pending_run` — ids of cells edited (staged) but not yet run.
+- `running` — ids of cells currently queued or running, in notebook order.
+- `execution_allowed` — whether Pluto will run code now (`false` in safe preview, and while the notebook process is stopped, restarting, or crashed).
+
+Listing does not record read receipts, so it never satisfies read-before-edit; a host can call it (e.g. at the end of an agent turn) to check run state.
 
 #### `read_notebook_code`
 
