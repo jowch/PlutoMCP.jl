@@ -17,6 +17,7 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- **`list_notebooks` run state:** each notebook now reports `pending_run` (staged, unrun cell ids), `running` (queued or running cell ids) and `execution_allowed` (`Pluto.will_run_code`). Listing records no read receipts, so it does not satisfy read-before-edit.
 - **`fold_cell`** tool and **`add_cell(folded=true)`**: hide a cell's code and show only its output (Pluto's fold toggle). Metadata only, persisted in the notebook file. `read_cell` now reports `code_folded`.
 - **Bound stdio sessions:** `connect(; binding_file, runtime_dir, cursor_host_pid)` owns a loopback control bridge, mints a session nonce, and never proxies to a foreign bridge
 - **JSON `/health`:** bound mode returns `{status,session_id,mcp_port,pluto_port,pluto}`; `/call` requires `X-Styx-Session-ID`

@@ -13,7 +13,7 @@ end
 const MCP_TOOLS = [
     Dict{String,Any}(
         "name"        => "list_notebooks",
-        "description" => "List all notebooks currently open in the Pluto session.",
+        "description" => "List all notebooks currently open in the Pluto session, with each one's run state: pending_run (ids of edited cells not yet run), running (ids of cells queued or running, in notebook order), and execution_allowed (whether Pluto will run code now: false in safe preview, and while the notebook process is stopped, restarting, or crashed). Does not count as reading any cell.",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(),
