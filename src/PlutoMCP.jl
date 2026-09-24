@@ -1,5 +1,6 @@
 module PlutoMCP
 
+using Base64
 using JSON
 using UUIDs
 using HTTP

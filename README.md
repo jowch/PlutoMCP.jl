@@ -162,6 +162,7 @@ everything else keeps working. Start `serve()` and the tools appear.
 | `list_notebooks` | List all notebooks open in the session |
 | `read_notebook_code` | Whole notebook as execution-order code projection |
 | `read_cell` | Code, output, and stale flag of a single cell |
+| `view_cell_output` | See a cell's output as a PNG image (plots, figures); re-renders SVG/HTML outputs via the notebook's worker |
 | `edit_cell` | Replace a cell's code; stages by default (`run_after=false`) |
 | `edit_cells` | Batch stage `{cell_id, code}[]`; never runs |
 | `add_cell` | Insert a new cell (`after_cell_id` required when notebook is non-empty) |

@@ -216,6 +216,27 @@ function tool_list_notebooks(session, _args)
     ]
 end
 
+function tool_view_cell_output(session, args)
+    nb   = _get_notebook(session, args["notebook_id"])
+    cell = _get_cell(nb, args["cell_id"])
+    cell.errored &&
+        throw(ArgumentError("no_image::Cell $(cell.cell_id) errored; read_cell shows the error"))
+    png = _cell_png(session, nb, cell)
+    if png === nothing
+        reason = Pluto.will_run_code(nb) ?
+            "its output ($(cell.output.mime)) has no PNG rendering; read_cell shows it as text" :
+            "the notebook isn't running code (safe preview), so its value can't be rendered"
+        throw(ArgumentError("no_image::Cell $(cell.cell_id): $reason"))
+    end
+    length(png) > MAX_IMAGE_BYTES &&
+        throw(ArgumentError("image_too_large::Cell $(cell.cell_id) renders to $(length(png)) bytes (max $MAX_IMAGE_BYTES)"))
+    return CellImage(Dict{String,Any}(
+        "cell_id"   => string(cell.cell_id),
+        "shown_as"  => string(cell.output.mime),
+        "png_bytes" => length(png),
+    ), png)
+end
+
 function tool_read_cell(session, args)
     nb   = _get_notebook(session, args["notebook_id"])
     cell = _get_cell(nb, args["cell_id"])
@@ -489,6 +510,8 @@ end
 function call_tool(session, name, arguments)
     if name == "list_notebooks"
         tool_list_notebooks(session, arguments)
+    elseif name == "view_cell_output"
+        tool_view_cell_output(session, arguments)
     elseif name == "read_cell"
         tool_read_cell(session, arguments)
     elseif name == "edit_cell"

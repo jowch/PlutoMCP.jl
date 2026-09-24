@@ -6,6 +6,7 @@ using JSON
 using HTTP
 using Sockets
 using SHA
+using Base64
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -383,6 +384,7 @@ end
         @test "edit_cell"       ∈ names
         @test "edit_cells"      ∈ names
         @test "submit_changes"  ∈ names
+        @test "view_cell_output" ∈ names
         @test "execute_cell"    ∈ names
         @test "add_cell"        ∈ names
         @test "delete_cell"     ∈ names
@@ -652,6 +654,31 @@ end
         @test string(cells[1].cell_id) ∈ result["cell_ids"]
         @test occursin("mdl = 1", result["code"])
         @test !(string(cells[2].cell_id) ∈ result["cell_ids"])
+    end
+
+    @testset "view_cell_output renders the cell's value as PNG" begin
+        two_formats = """
+        begin
+            struct TwoFormats end
+            Base.show(io::IO, ::MIME"image/svg+xml", ::TwoFormats) = print(io, "<svg xmlns='http://www.w3.org/2000/svg'/>")
+            Base.show(io::IO, ::MIME"image/png", ::TwoFormats) = write(io, UInt8[0x89, 0x50, 0x4e, 0x47])
+            TwoFormats()
+        end
+        """
+        session, nb, cells = make_session_with_notebook(two_formats, "1 + 1")
+        Pluto.update_save_run!(session, nb, nb.cells; run_async=false, save=true)
+        args(c) = Dict("notebook_id" => string(nb.notebook_id), "cell_id" => string(c.cell_id))
+
+        @test cells[1].output.mime == MIME("image/svg+xml")      # Pluto shows the SVG...
+        img = PlutoMCP.tool_view_cell_output(session, args(cells[1]))
+        @test img.png == UInt8[0x89, 0x50, 0x4e, 0x47]            # ...the tool returns the PNG
+        @test occursin("view_cell_output", PlutoMCP.tool_read_cell(session, args(cells[1]))["output"])
+        @test_throws ArgumentError PlutoMCP.tool_view_cell_output(session, args(cells[2]))  # no PNG form
+
+        result = PlutoMCP._handle_tool_call(session, "view_cell_output", args(cells[1]))
+        @test result["content"][2]["type"] == "image"
+        @test result["content"][2]["mimeType"] == "image/png"
+        @test base64decode(result["content"][2]["data"]) == img.png
     end
 
     @testset "execute_cell receipt has execution status" begin
