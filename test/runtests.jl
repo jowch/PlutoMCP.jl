@@ -42,6 +42,18 @@ end
         @test length(result) == 1
         @test result[1]["notebook_id"] == string(nb.notebook_id)
         @test result[1]["cell_count"] == 1
+        @test result[1]["pending_run"] == String[]
+        @test result[1]["running"] == String[]
+        @test result[1]["execution_allowed"] isa Bool
+    end
+
+    @testset "list_notebooks reports pending_run without read receipts" begin
+        session, nb, cells = make_session_with_notebook("y = 2")
+        PlutoMCP.mark_pending!(nb.notebook_id, cells[1].cell_id)
+        result = PlutoMCP.tool_list_notebooks(session, Dict())
+        @test result[1]["pending_run"] == [string(cells[1].cell_id)]
+        # Listing must not satisfy read-before-edit.
+        @test_throws ArgumentError PlutoMCP.require_fresh_read!(nb.notebook_id, cells[1])
     end
 
     @testset "read_cell" begin

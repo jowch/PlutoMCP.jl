@@ -211,6 +211,11 @@ function tool_list_notebooks(session, _args)
             "notebook_id" => string(nb.notebook_id),
             "path"        => nb.path,
             "cell_count"  => length(nb.cell_order),
+            # Run state without read receipts, so a host can check it (e.g. at the end
+            # of an agent turn) without weakening read-before-edit.
+            "pending_run"       => [string(id) for id in pending_run_ids(nb.notebook_id)],
+            "running"           => [string(c.cell_id) for c in values(nb.cells_dict) if c.running || c.queued],
+            "execution_allowed" => Pluto.will_run_code(nb),
         )
         for nb in values(session.notebooks)
     ]
