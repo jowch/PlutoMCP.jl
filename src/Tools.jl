@@ -222,12 +222,8 @@ function tool_view_cell_output(session, args)
     cell.errored &&
         throw(ArgumentError("no_image::Cell $(cell.cell_id) errored; read_cell shows the error"))
     png = _cell_png(session, nb, cell)
-    if png === nothing
-        reason = Pluto.will_run_code(nb) ?
-            "its output ($(cell.output.mime)) has no PNG rendering; read_cell shows it as text" :
-            "the notebook isn't running code (safe preview), so its value can't be rendered"
-        throw(ArgumentError("no_image::Cell $(cell.cell_id): $reason"))
-    end
+    png === nothing && throw(ArgumentError("no_image::Cell $(cell.cell_id): its output " *
+        "($(cell.output.mime)) has no PNG rendering; read_cell shows it as text"))
     length(png) > MAX_IMAGE_BYTES &&
         throw(ArgumentError("image_too_large::Cell $(cell.cell_id) renders to $(length(png)) bytes (max $MAX_IMAGE_BYTES)"))
     return CellImage(Dict{String,Any}(

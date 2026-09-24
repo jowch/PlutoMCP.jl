@@ -34,7 +34,7 @@ const MCP_TOOLS = [
     ),
     Dict{String,Any}(
         "name"        => "view_cell_output",
-        "description" => "See a cell's output as an image (PNG): plots, figures, rendered images. Use to check what a visual output actually looks like; read_cell only describes non-text outputs. Needs the notebook to be running code (not safe preview) unless the output already is a PNG.",
+        "description" => "See a cell's output as an image (PNG): plots, figures, rendered images. Use to check what a visual output actually looks like; read_cell only describes non-text outputs. Needs the notebook to be running code (not safe preview) unless the output already is a PNG, and waits while the notebook's worker is busy running cells. Outputs with no PNG form (Markdown, HTML, text) fail with no_image; use read_cell for those.",
         "inputSchema" => Dict{String,Any}(
             "type"       => "object",
             "properties" => Dict{String,Any}(

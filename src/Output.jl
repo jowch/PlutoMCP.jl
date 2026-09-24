@@ -97,7 +97,10 @@ end
 # Visual outputs (view_cell_output)
 # ---------------------------------------------------------------------------
 
-_is_visual(mime) = startswith(string(mime), "image/") || mime == MIME("text/html")
+# Outputs view_cell_output can usually turn into a PNG: PNGs as-is, and SVGs (plots),
+# whose values typically also `show` as PNG. HTML (`md""`, `HTML()`) and other image
+# formats rarely have a PNG form, so read_cell doesn't point agents at the tool for them.
+_is_visual(mime) = mime == MIME("image/png") || mime == MIME("image/svg+xml")
 
 "A tool result carrying a PNG, sent as an MCP image content block next to `meta`."
 struct CellImage
@@ -114,15 +117,17 @@ const MAX_IMAGE_BYTES = 4_000_000
 PNG rendering of a cell's output. Pluto displays the richest format it can (SVG
 before PNG for plots), so unless the output already is a PNG, ask the notebook's
 worker to re-render the cell's value as `image/png`. `nothing` if the value has
-no PNG form or the notebook has no running worker (safe preview).
+no PNG form; throws `no_image::` if the notebook has no running worker (safe preview).
 """
 function _cell_png(session, nb, cell)
     body = cell.output.body
     cell.output.mime == MIME("image/png") && body isa Vector{UInt8} && return body
     workspace = Pluto.WorkspaceManager.get_workspace((session, nb); allow_creation=false)
-    workspace === nothing && return nothing
+    workspace === nothing && throw(ArgumentError("no_image::Cell $(cell.cell_id): the notebook " *
+        "has no running worker (safe preview or not yet run), so its value can't be rendered"))
     cell_id = cell.cell_id
-    # ponytail: no timeout; a worker busy with a long run delays this call until it yields.
+    # ponytail: no timeout (documented in the tool description); a worker busy with a
+    # long run delays this call until it yields.
     Pluto.WorkspaceManager.Malt.remote_eval_fetch(workspace.worker, quote
         let value = get(PlutoRunner.cell_results, $cell_id, nothing)
             value !== nothing && showable(MIME"image/png"(), value) ?
