@@ -1228,6 +1228,35 @@ end
         end
     end
 
+    @testset "lifecycle: new_notebook creates and loads a Pluto-written file" begin
+        PlutoMCP.stop_pluto_stack!()
+        session = Pluto.ServerSession()
+        PlutoMCP.bind_standalone_session!(session)
+        dir = mktempdir()
+        try
+            path = joinpath(dir, "fresh.jl")
+            result = PlutoMCP.tool_new_notebook(Dict{String,Any}("path" => path))
+            @test result["created"] == true
+            @test result["path"] == path
+            @test result["execution_allowed"] == false
+            @test isfile(path)
+            @test startswith(read(path, String), "### A Pluto.jl notebook ###")
+            @test haskey(session.notebooks, UUID(result["notebook_id"]))
+
+            # Never clobber, and reject non-notebook paths.
+            @test_throws ArgumentError PlutoMCP.tool_new_notebook(Dict{String,Any}("path" => path))
+            @test_throws ArgumentError PlutoMCP.tool_new_notebook(Dict{String,Any}("path" => joinpath(dir, "x.txt")))
+            @test_throws ArgumentError PlutoMCP.tool_new_notebook(Dict{String,Any}("path" => joinpath(dir, "missing", "y.jl")))
+
+            default = PlutoMCP.tool_new_notebook(Dict{String,Any}())
+            @test isfile(default["path"])
+            @test haskey(session.notebooks, UUID(default["notebook_id"]))
+            rm(default["path"]; force=true)
+        finally
+            PlutoMCP.stop_pluto_stack!()
+        end
+    end
+
     @testset "lifecycle: allow_execution exits safe preview" begin
         PlutoMCP.stop_pluto_stack!()
         fixture = joinpath(@__DIR__, "fixtures", "test_notebook.jl")
@@ -1413,6 +1442,7 @@ end
         @test "start_pluto_session" ∈ names
         @test "stop_pluto_session"  ∈ names
         @test "open_notebook"       ∈ names
+        @test "new_notebook"        ∈ names
         @test "allow_execution"     ∈ names
     end
 
