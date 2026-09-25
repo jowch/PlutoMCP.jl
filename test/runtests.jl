@@ -1347,6 +1347,18 @@ end
             nid = open_result["notebook_id"]
             @test open_result["execution_allowed"] == false
 
+            # An edit staged during safe preview.
+            sess = PlutoMCP.standalone_session()
+            nb = sess.notebooks[UUID(nid)]
+            ycell = nb.cells_dict[UUID("22222222-2222-2222-2222-222222222222")]
+            read_cells!(sess, nb, ycell)
+            PlutoMCP.tool_edit_cell(sess, Dict(
+                "notebook_id" => nid,
+                "cell_id"     => string(ycell.cell_id),
+                "code"        => "y = x * 8",
+            ))
+            @test ycell.cell_id in PlutoMCP.pending_run_ids(nb.notebook_id)
+
             allow_result = PlutoMCP.tool_allow_execution(Dict(
                 "notebook_id"  => nid,
                 "run_notebook" => true,
@@ -1355,10 +1367,17 @@ end
             @test allow_result["ran"] == true
             @test allow_result["already_allowed"] == false
             @test any(startswith(w, "async_execution::") for w in get(allow_result, "run_warnings", String[]))
-
-            sess = PlutoMCP.standalone_session()
-            nb = sess.notebooks[UUID(nid)]
             @test Pluto.will_run_code(nb)
+
+            # The run clears it, like run_all_cells does.
+            deadline = time() + 60
+            while !isempty(PlutoMCP.pending_run_ids(nb.notebook_id)) && time() < deadline
+                sleep(0.25)
+            end
+            @test isempty(PlutoMCP.pending_run_ids(nb.notebook_id))
+            # Cleared after the edited cell ran, not before.
+            @test !ycell.queued && !ycell.running
+            @test occursin("48", repr(ycell.output.body))
         finally
             PlutoMCP.stop_pluto_stack!()
         end

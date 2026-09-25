@@ -423,8 +423,10 @@ function allow_notebook_execution!(session, notebook; run_async::Bool=true, run_
     if run_cells
         notebook.process_status = Pluto.ProcessStatus.starting
         _lifecycle_notify_browser(session, notebook)
-        # Non-blocking by default: sync_nbpkg + reactive run stay off the MCP thread.
-        Pluto.update_save_run!(session, notebook, notebook.cells; run_async=run_async, save=true)
+        # Run through _run_cells! so edits staged during safe preview (pending_run)
+        # clear once their cells complete. Non-blocking by default: sync_nbpkg +
+        # reactive run stay off the MCP thread.
+        _run_cells!(session, notebook, collect(notebook.cells); wait_for_completion=!run_async)
         _lifecycle_notify_browser(session, notebook)
         ran = true
     else
