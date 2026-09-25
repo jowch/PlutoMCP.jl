@@ -1347,6 +1347,12 @@ end
             nid = open_result["notebook_id"]
             @test open_result["execution_allowed"] == false
 
+            # An edit staged during safe preview.
+            sess = PlutoMCP.standalone_session()
+            nb = sess.notebooks[UUID(nid)]
+            PlutoMCP.mark_pending!(nb.notebook_id, first(nb.cell_order))
+            @test !isempty(PlutoMCP.pending_run_ids(nb.notebook_id))
+
             allow_result = PlutoMCP.tool_allow_execution(Dict(
                 "notebook_id"  => nid,
                 "run_notebook" => true,
@@ -1355,10 +1361,14 @@ end
             @test allow_result["ran"] == true
             @test allow_result["already_allowed"] == false
             @test any(startswith(w, "async_execution::") for w in get(allow_result, "run_warnings", String[]))
-
-            sess = PlutoMCP.standalone_session()
-            nb = sess.notebooks[UUID(nid)]
             @test Pluto.will_run_code(nb)
+
+            # The run clears it, like run_all_cells does.
+            deadline = time() + 60
+            while !isempty(PlutoMCP.pending_run_ids(nb.notebook_id)) && time() < deadline
+                sleep(0.25)
+            end
+            @test isempty(PlutoMCP.pending_run_ids(nb.notebook_id))
         finally
             PlutoMCP.stop_pluto_stack!()
         end

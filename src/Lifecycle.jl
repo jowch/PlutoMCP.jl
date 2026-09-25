@@ -423,8 +423,18 @@ function allow_notebook_execution!(session, notebook; run_async::Bool=true, run_
     if run_cells
         notebook.process_status = Pluto.ProcessStatus.starting
         _lifecycle_notify_browser(session, notebook)
+        # Edits staged during safe preview are in pending_run. Like _run_cells!:
+        # pre-mark the cells queued (so the waiter can't see "not started" as
+        # "done"), run, then clear pending for the cells that complete. Without
+        # this, a notebook run via allow_execution keeps reporting them as unrun.
+        cells = collect(notebook.cells)
+        _queue_cells!(notebook, cells)
         # Non-blocking by default: sync_nbpkg + reactive run stay off the MCP thread.
         Pluto.update_save_run!(session, notebook, notebook.cells; run_async=run_async, save=true)
+        @async begin
+            completed, = _wait_cells!(cells)
+            !isempty(completed) && clear_pending!(notebook.notebook_id, completed)
+        end
         _lifecycle_notify_browser(session, notebook)
         ran = true
     else
