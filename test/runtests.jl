@@ -1350,8 +1350,14 @@ end
             # An edit staged during safe preview.
             sess = PlutoMCP.standalone_session()
             nb = sess.notebooks[UUID(nid)]
-            PlutoMCP.mark_pending!(nb.notebook_id, first(nb.cell_order))
-            @test !isempty(PlutoMCP.pending_run_ids(nb.notebook_id))
+            ycell = nb.cells_dict[UUID("22222222-2222-2222-2222-222222222222")]
+            read_cells!(sess, nb, ycell)
+            PlutoMCP.tool_edit_cell(sess, Dict(
+                "notebook_id" => nid,
+                "cell_id"     => string(ycell.cell_id),
+                "code"        => "y = x * 8",
+            ))
+            @test ycell.cell_id in PlutoMCP.pending_run_ids(nb.notebook_id)
 
             allow_result = PlutoMCP.tool_allow_execution(Dict(
                 "notebook_id"  => nid,
@@ -1369,6 +1375,9 @@ end
                 sleep(0.25)
             end
             @test isempty(PlutoMCP.pending_run_ids(nb.notebook_id))
+            # Cleared after the edited cell ran, not before.
+            @test !ycell.queued && !ycell.running
+            @test occursin("48", repr(ycell.output.body))
         finally
             PlutoMCP.stop_pluto_stack!()
         end
